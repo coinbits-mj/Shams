@@ -1,5 +1,7 @@
 """Memory layer — read/write conversations, memory, open loops, decisions to PostgreSQL."""
 
+from __future__ import annotations
+
 import json
 import psycopg2
 import psycopg2.extras

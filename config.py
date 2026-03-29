@@ -11,11 +11,12 @@ TABLE_PREFIX = "shams_"
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-# WhatsApp (Twilio)
-TWILIO_ACCOUNT_SID = os.environ["TWILIO_ACCOUNT_SID"]
-TWILIO_AUTH_TOKEN = os.environ["TWILIO_AUTH_TOKEN"]
-TWILIO_WHATSAPP_NUMBER = os.environ["TWILIO_WHATSAPP_NUMBER"]  # e.g. whatsapp:+14155238886
-MAHER_WHATSAPP_NUMBER = os.environ["MAHER_WHATSAPP_NUMBER"]    # e.g. whatsapp:+1234567890
+# Telegram
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")  # MJ's chat ID — bot only responds to this
+
+# OpenAI (Whisper for voice transcription)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 # Rumi (coffee-pl-bot internal API)
 RUMI_BASE_URL = os.environ.get("RUMI_BASE_URL", "http://localhost:8080")

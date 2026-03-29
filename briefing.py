@@ -70,7 +70,7 @@ def build_evening_context() -> str:
             parts.append(f"- {e['start']} — {e['summary']}")
 
     # MTD P&L
-    mtd = rumi_client.get_mtd_pl()
+    mtd = rumi_client.get_monthly_pl()
     if mtd:
         parts.append(f"\n## MTD P&L")
         parts.append(f"- Revenue: ${mtd.get('revenue', 0):,.0f}")

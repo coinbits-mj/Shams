@@ -2,25 +2,33 @@
 
 import logging
 from datetime import datetime, timedelta
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-
-from config import GOOGLE_TOKEN_PATH, GOOGLE_CREDENTIALS_PATH
+from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
 
 logger = logging.getLogger(__name__)
+
+_GOOGLE_AVAILABLE = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+if _GOOGLE_AVAILABLE:
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
+    from googleapiclient.discovery import build
+else:
+    logger.warning("Google credentials not set — Gmail/Calendar disabled")
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/calendar.readonly",
 ]
 
+TOKEN_PATH = "token.json"
+CREDENTIALS_PATH = "credentials.json"
 
-def _get_creds() -> Credentials:
-    import json, pathlib
 
-    token_path = pathlib.Path(GOOGLE_TOKEN_PATH)
+def _get_creds():
+    import pathlib
+
+    token_path = pathlib.Path(TOKEN_PATH)
     creds = None
 
     if token_path.exists():
@@ -30,7 +38,7 @@ def _get_creds() -> Credentials:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
         token_path.write_text(creds.to_json())
 
@@ -41,6 +49,8 @@ def _get_creds() -> Credentials:
 
 def get_unread_emails(max_results: int = 10) -> list[dict]:
     """Fetch unread emails — returns list of {subject, from, snippet, date}."""
+    if not _GOOGLE_AVAILABLE:
+        return []
     try:
         service = build("gmail", "v1", credentials=_get_creds())
         results = service.users().messages().list(
@@ -68,6 +78,8 @@ def get_unread_emails(max_results: int = 10) -> list[dict]:
 
 def get_todays_events() -> list[dict]:
     """Fetch today's calendar events — returns list of {summary, start, end, location}."""
+    if not _GOOGLE_AVAILABLE:
+        return []
     try:
         service = build("calendar", "v3", credentials=_get_creds())
         now = datetime.utcnow()
@@ -100,6 +112,8 @@ def get_todays_events() -> list[dict]:
 
 def get_upcoming_events(days: int = 7) -> list[dict]:
     """Fetch events for the next N days."""
+    if not _GOOGLE_AVAILABLE:
+        return []
     try:
         service = build("calendar", "v3", credentials=_get_creds())
         now = datetime.utcnow()
