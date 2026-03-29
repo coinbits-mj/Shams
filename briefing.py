@@ -7,6 +7,7 @@ from datetime import date
 import memory
 import claude_client
 import rumi_client
+import mercury_client
 import google_client
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,11 @@ def build_morning_context() -> str:
         parts.append(f"- Net margin: {pl.get('net_margin_pct', 0):.1f}%")
         parts.append(f"- Food cost: {pl.get('food_cost_pct', 0):.1f}%")
         parts.append(f"- Labor: {pl.get('labor_pct', 0):.1f}%")
+
+    # Mercury cash position
+    cash = mercury_client.get_cash_summary()
+    if cash and cash != "Mercury: unavailable":
+        parts.append(f"\n{cash}")
 
     # Action items
     actions = rumi_client.get_action_items()
