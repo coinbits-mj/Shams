@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { getSession } from './api';
 import Layout from './components/Layout';
 import Login from './pages/Login';
+import MissionControl from './pages/MissionControl';
 import Chat from './pages/Chat';
 import Memory from './pages/Memory';
 import Loops from './pages/Loops';
@@ -21,7 +22,8 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route index element={<Chat />} />
+          <Route index element={<MissionControl />} />
+          <Route path="missions" element={<MissionControl />} />
           <Route path="chat" element={<Chat />} />
           <Route path="conversations" element={<Conversations />} />
           <Route path="memory" element={<Memory />} />

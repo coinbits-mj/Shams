@@ -8,7 +8,6 @@ export default function Login() {
   const [token, setToken] = useState('');
   const navigate = useNavigate();
 
-  // Check if we're returning from a magic link
   const params = new URLSearchParams(window.location.search);
   const verifyToken = params.get('token');
 
@@ -29,51 +28,37 @@ export default function Login() {
     setSent(true);
   }
 
-  // Dev mode: direct session input
   async function handleDevLogin(e) {
     e.preventDefault();
-    if (token) {
-      setSession(token);
-      navigate('/');
-    }
+    if (token) { setSession(token); navigate('/'); }
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950">
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-8 w-full max-w-md">
-        <h1 className="text-2xl font-bold text-amber-400 mb-1">Shams</h1>
-        <p className="text-slate-500 text-sm mb-6">Executive AI — Maher Janajri</p>
+    <div className="min-h-screen flex items-center justify-center dot-grid">
+      <div className="glass-card p-8 w-full max-w-sm">
+        <h1 className="mono-heading text-2xl text-[var(--amber)] mb-1">shams</h1>
+        <p className="text-[10px] text-[var(--text-muted)] mb-8 uppercase tracking-[0.2em]">executive intelligence</p>
 
         {!sent ? (
           <form onSubmit={handleLogin}>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="maher@qcitycoffee.com"
-              className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 mb-4 focus:outline-none focus:border-amber-400"
-            />
-            <button
-              type="submit"
-              className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-slate-900 font-semibold rounded-lg transition-colors"
-            >
-              Send Magic Link
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)}
+              placeholder="email"
+              className="w-full px-4 py-3 bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] mb-4 focus:outline-none focus:border-[var(--accent)] mono-heading text-sm" />
+            <button type="submit"
+              className="w-full py-3 bg-[var(--accent)] hover:bg-[#60ccf8] text-[var(--bg-deep)] font-semibold rounded-lg transition-colors mono-heading text-sm">
+              send magic link
             </button>
           </form>
         ) : (
           <div>
-            <p className="text-slate-300 mb-4">Check your email for the login link.</p>
-            <p className="text-slate-500 text-sm mb-4">Or paste your session token below (dev mode):</p>
+            <p className="text-[var(--text-secondary)] text-sm mb-4">check your email for the login link.</p>
             <form onSubmit={handleDevLogin}>
-              <input
-                type="text"
-                value={token}
-                onChange={e => setToken(e.target.value)}
-                placeholder="Session token"
-                className="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded-lg text-white placeholder-slate-500 mb-4 focus:outline-none focus:border-amber-400"
-              />
-              <button type="submit" className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors">
-                Login with Token
+              <input type="text" value={token} onChange={e => setToken(e.target.value)}
+                placeholder="or paste session token"
+                className="w-full px-4 py-3 bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] placeholder-[var(--text-muted)] mb-4 focus:outline-none focus:border-[var(--accent)] mono-heading text-sm" />
+              <button type="submit"
+                className="w-full py-3 bg-[var(--bg-card)] hover:bg-[var(--bg-hover)] text-[var(--text-primary)] rounded-lg transition-colors mono-heading text-sm border border-[var(--border)]">
+                enter
               </button>
             </form>
           </div>

@@ -3,34 +3,28 @@ import { get } from '../api';
 
 export default function Briefings() {
   const [briefings, setBriefings] = useState([]);
-
-  useEffect(() => {
-    get('/briefings?limit=30').then(data => {
-      if (data) setBriefings(data);
-    });
-  }, []);
+  useEffect(() => { get('/briefings?limit=30').then(d => d && setBriefings(d)); }, []);
 
   return (
     <div className="p-6">
-      <h2 className="text-lg font-semibold mb-4">Briefing History</h2>
-      <div className="space-y-4">
+      <h2 className="mono-heading text-lg mb-4">briefing history</h2>
+      <div className="space-y-3">
         {briefings.map((b, i) => (
-          <div key={i} className="p-4 bg-slate-800 rounded-lg border border-slate-700">
+          <div key={i} className="glass-card p-4">
             <div className="flex items-center gap-3 mb-2">
-              <span className={`text-xs px-2 py-0.5 rounded font-medium ${
-                b.type === 'morning' ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'
+              <span className={`mono-heading text-xs px-2 py-0.5 rounded ${
+                b.type === 'morning' ? 'bg-[var(--amber-glow)] text-[var(--amber)]' : 'bg-[var(--accent-glow)] text-[var(--accent)]'
               }`}>
                 {b.type}
               </span>
-              <span className="text-xs text-slate-500">
-                {b.delivered_at ? new Date(b.delivered_at).toLocaleString() : 'Not delivered'}
+              <span className="text-[10px] text-[var(--text-muted)]">
+                {b.delivered_at ? new Date(b.delivered_at).toLocaleString() : 'pending'}
               </span>
-              <span className="text-xs text-slate-600">via {b.channel}</span>
             </div>
-            <p className="text-sm text-slate-300 whitespace-pre-wrap">{b.content}</p>
+            <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">{b.content}</p>
           </div>
         ))}
-        {briefings.length === 0 && <p className="text-slate-500 text-sm">No briefings delivered yet.</p>}
+        {briefings.length === 0 && <p className="text-[var(--text-muted)] text-sm">no briefings delivered yet.</p>}
       </div>
     </div>
   );

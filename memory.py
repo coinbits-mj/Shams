@@ -235,6 +235,84 @@ def validate_magic_link(token: str) -> str | None:
         return row[1]
 
 
+# ── Agents ───────────────────────────────────────────────────────────────────
+
+def get_agents() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}agents ORDER BY name")
+        return cur.fetchall()
+
+
+def update_agent_status(name: str, status: str):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}agents SET status = %s, last_heartbeat = NOW() WHERE name = %s",
+            (status, name),
+        )
+
+
+# ── Missions ─────────────────────────────────────────────────────────────────
+
+def create_mission(title: str, description: str = "", priority: str = "normal",
+                   assigned_agent: str | None = None, tags: list | None = None) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        status = "assigned" if assigned_agent else "inbox"
+        cur.execute(
+            f"INSERT INTO {P}missions (title, description, status, priority, assigned_agent, tags) "
+            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (title, description, status, priority, assigned_agent, tags or []),
+        )
+        return cur.fetchone()[0]
+
+
+def get_missions(status: str | None = None, agent: str | None = None) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conditions, params = [], []
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        if agent:
+            conditions.append("assigned_agent = %s")
+            params.append(agent)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        cur.execute(f"SELECT * FROM {P}missions {where} ORDER BY "
+                    f"CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, "
+                    f"created_at DESC LIMIT 100", params)
+        return cur.fetchall()
+
+
+def update_mission(mission_id: int, **kwargs):
+    with _conn() as conn, conn.cursor() as cur:
+        sets = ["updated_at = NOW()"]
+        params = []
+        for k, v in kwargs.items():
+            if k in ("status", "priority", "assigned_agent", "result", "title", "description"):
+                sets.append(f"{k} = %s")
+                params.append(v)
+        params.append(mission_id)
+        cur.execute(f"UPDATE {P}missions SET {', '.join(sets)} WHERE id = %s", params)
+
+
+# ── Activity Feed ────────────────────────────────────────────────────────────
+
+def log_activity(agent_name: str, event_type: str, content: str, metadata: dict | None = None):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}activity_feed (agent_name, event_type, content, metadata) VALUES (%s, %s, %s, %s)",
+            (agent_name, event_type, content, json.dumps(metadata or {})),
+        )
+
+
+def get_activity_feed(limit: int = 50, agent: str | None = None) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if agent:
+            cur.execute(f"SELECT * FROM {P}activity_feed WHERE agent_name = %s ORDER BY timestamp DESC LIMIT %s",
+                        (agent, limit))
+        else:
+            cur.execute(f"SELECT * FROM {P}activity_feed ORDER BY timestamp DESC LIMIT %s", (limit,))
+        return cur.fetchall()
+
+
 # ── Schema bootstrap ─────────────────────────────────────────────────────────
 
 def ensure_tables():

@@ -1,9 +1,32 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+}
+
+:root {
+  --bg-deep: #0d1117;
+  --bg-surface: #151b23;
+  --bg-card: #1c2333;
+  --bg-hover: #242d3d;
+  --border: rgba(56, 189, 248, 0.12);
+  --border-bright: rgba(56, 189, 248, 0.3);
+  --accent: #38bdf8;
+  --accent-glow: rgba(56, 189, 248, 0.15);
+  --amber: #f59e0b;
+  --amber-glow: rgba(245, 158, 11, 0.15);
+  --green: #22c55e;
+  --red: #ef4444;
+  --text-primary: #e2e8f0;
+  --text-secondary: #64748b;
+  --text-muted: #475569;
+}
+
 body {
   margin: 0;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--bg-deep);
+  color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
@@ -13,4 +36,61 @@ body {
   margin: 0;
   text-align: left;
   min-height: 100vh;
+}
+
+/* Monospace headings like air.dev */
+.mono-heading {
+  font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  text-transform: lowercase;
+}
+
+/* Glass card effect */
+.glass-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+}
+
+.glass-card:hover {
+  border-color: var(--border-bright);
+}
+
+/* Glow effects */
+.glow-accent {
+  box-shadow: 0 0 20px var(--accent-glow), inset 0 0 20px var(--accent-glow);
+}
+
+.glow-amber {
+  box-shadow: 0 0 20px var(--amber-glow);
+}
+
+/* Pulse animation for active agents */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-active {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Status colors */
+.status-active { color: var(--green); }
+.status-idle { color: var(--amber); }
+.status-offline { color: var(--text-muted); }
+.status-error { color: var(--red); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* Dot grid background pattern */
+.dot-grid {
+  background-image: radial-gradient(circle, rgba(56, 189, 248, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
 }

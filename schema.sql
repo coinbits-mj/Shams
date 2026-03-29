@@ -79,6 +79,39 @@ CREATE TABLE IF NOT EXISTS shams_magic_links (
     expires_at      TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS shams_agents (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(50) NOT NULL UNIQUE,     -- 'shams', 'rumi', 'leo'
+    role            VARCHAR(100) NOT NULL,            -- 'Chief of Staff', 'Operations', 'Health Coach'
+    status          VARCHAR(20) NOT NULL DEFAULT 'idle' CHECK (status IN ('active', 'idle', 'offline', 'error')),
+    health_url      VARCHAR(500) DEFAULT '',           -- URL to ping for health check
+    last_heartbeat  TIMESTAMPTZ,
+    config          JSONB DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shams_missions (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(500) NOT NULL,
+    description     TEXT DEFAULT '',
+    status          VARCHAR(20) NOT NULL DEFAULT 'inbox' CHECK (status IN ('inbox', 'assigned', 'active', 'review', 'done', 'dropped')),
+    priority        VARCHAR(10) NOT NULL DEFAULT 'normal' CHECK (priority IN ('urgent', 'high', 'normal', 'low')),
+    assigned_agent  VARCHAR(50) REFERENCES shams_agents(name),
+    tags            TEXT[] DEFAULT '{}',
+    result          TEXT DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shams_activity_feed (
+    id              SERIAL PRIMARY KEY,
+    agent_name      VARCHAR(50) NOT NULL,
+    event_type      VARCHAR(50) NOT NULL,  -- 'message', 'tool_call', 'mission_update', 'alert', 'heartbeat'
+    content         TEXT NOT NULL,
+    metadata        JSONB DEFAULT '{}',
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON shams_conversations (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_key ON shams_memory (key);
@@ -88,3 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_files_uploaded ON shams_files (uploaded_at DESC);
 CREATE INDEX IF NOT EXISTS idx_files_type ON shams_files (file_type);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON shams_sessions (token);
 CREATE INDEX IF NOT EXISTS idx_magic_links_token ON shams_magic_links (token);
+CREATE INDEX IF NOT EXISTS idx_missions_status ON shams_missions (status);
+CREATE INDEX IF NOT EXISTS idx_missions_agent ON shams_missions (assigned_agent);
+CREATE INDEX IF NOT EXISTS idx_activity_feed_ts ON shams_activity_feed (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_feed_agent ON shams_activity_feed (agent_name, timestamp DESC);

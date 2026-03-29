@@ -386,3 +386,92 @@ def rumi_monthly():
 @require_auth
 def rumi_scorecard():
     return jsonify(rumi_client.get_scorecard() or {})
+
+
+# ── Agents ───────────────────────────────────────────────────────────────────
+
+@api.route("/agents", methods=["GET"])
+@require_auth
+def get_agents():
+    agents = memory.get_agents()
+    result = []
+    for a in agents:
+        d = dict(a)
+        for k in ("last_heartbeat", "created_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        if d.get("config") and isinstance(d["config"], str):
+            d["config"] = json.loads(d["config"])
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/agents/<name>/status", methods=["PATCH"])
+@require_auth
+def update_agent_status(name):
+    data = request.get_json(silent=True) or {}
+    status = data.get("status", "idle")
+    memory.update_agent_status(name, status)
+    return jsonify({"ok": True})
+
+
+# ── Missions ─────────────────────────────────────────────────────────────────
+
+@api.route("/missions", methods=["GET"])
+@require_auth
+def get_missions():
+    status = request.args.get("status")
+    agent = request.args.get("agent")
+    missions = memory.get_missions(status, agent)
+    result = []
+    for m in missions:
+        d = dict(m)
+        for k in ("created_at", "updated_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/missions", methods=["POST"])
+@require_auth
+def create_mission():
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    mission_id = memory.create_mission(
+        title, data.get("description", ""), data.get("priority", "normal"),
+        data.get("assigned_agent"), data.get("tags", [])
+    )
+    memory.log_activity("shams", "mission_created", f"Mission #{mission_id}: {title}")
+    return jsonify({"id": mission_id})
+
+
+@api.route("/missions/<int:mission_id>", methods=["PATCH"])
+@require_auth
+def update_mission(mission_id):
+    data = request.get_json(silent=True) or {}
+    memory.update_mission(mission_id, **data)
+    if data.get("status"):
+        memory.log_activity("shams", "mission_update", f"Mission #{mission_id} → {data['status']}")
+    return jsonify({"ok": True})
+
+
+# ── Activity Feed ────────────────────────────────────────────────────────────
+
+@api.route("/feed", methods=["GET"])
+@require_auth
+def get_feed():
+    limit = request.args.get("limit", 50, type=int)
+    agent = request.args.get("agent")
+    feed = memory.get_activity_feed(limit, agent)
+    result = []
+    for f in feed:
+        d = dict(f)
+        if d.get("timestamp"):
+            d["timestamp"] = d["timestamp"].isoformat()
+        if d.get("metadata") and isinstance(d["metadata"], str):
+            d["metadata"] = json.loads(d["metadata"])
+        result.append(d)
+    return jsonify(result)

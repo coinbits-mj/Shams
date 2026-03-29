@@ -1,16 +1,17 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { MessageSquare, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History } from 'lucide-react';
 
 const nav = [
-  { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/conversations', label: 'History', icon: History },
-  { to: '/memory', label: 'Memory', icon: Brain },
-  { to: '/loops', label: 'Open Loops', icon: RefreshCw },
-  { to: '/decisions', label: 'Decisions', icon: Scale },
-  { to: '/briefings', label: 'Briefings', icon: FileText },
-  { to: '/files', label: 'Files', icon: FolderOpen },
-  { to: '/mercury', label: 'Mercury', icon: Landmark },
+  { to: '/', label: 'mission control', icon: LayoutGrid, end: true },
+  { to: '/chat', label: 'chat', icon: MessageSquare },
+  { to: '/conversations', label: 'history', icon: History },
+  { to: '/memory', label: 'memory', icon: Brain },
+  { to: '/loops', label: 'open loops', icon: RefreshCw },
+  { to: '/decisions', label: 'decisions', icon: Scale },
+  { to: '/briefings', label: 'briefings', icon: FileText },
+  { to: '/files', label: 'files', icon: FolderOpen },
+  { to: '/mercury', label: 'mercury', icon: Landmark },
 ];
 
 export default function Layout() {
@@ -24,35 +25,38 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen">
-      <aside className="w-56 bg-slate-900 border-r border-slate-700 flex flex-col">
-        <div className="p-4 border-b border-slate-700">
-          <h1 className="text-xl font-bold text-amber-400">☀ Shams</h1>
-          <p className="text-xs text-slate-500 mt-1">Executive AI</p>
+      <aside className="w-52 bg-[var(--bg-surface)] border-r border-[var(--border)] flex flex-col">
+        <div className="p-5 border-b border-[var(--border)]">
+          <h1 className="mono-heading text-xl text-[var(--amber)]">shams</h1>
+          <p className="text-[10px] text-[var(--text-muted)] mt-1 uppercase tracking-[0.2em]">mission control</p>
         </div>
-        <nav className="flex-1 p-2 space-y-1">
-          {nav.map(({ to, label, icon: Icon }) => (
+        <nav className="flex-1 p-2 space-y-0.5">
+          {nav.map(({ to, label, icon: Icon, end }) => (
             <NavLink
               key={to}
               to={to}
+              end={end}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
-                  isActive ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                `flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] transition-all duration-200 ${
+                  isActive
+                    ? 'bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)]'
+                    : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                 }`
               }
             >
-              <Icon size={16} />
-              {label}
+              <Icon size={14} />
+              <span className="mono-heading">{label}</span>
             </NavLink>
           ))}
         </nav>
         <button
           onClick={handleLogout}
-          className="m-2 p-2 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          className="m-3 p-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors mono-heading"
         >
-          Logout
+          logout
         </button>
       </aside>
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto dot-grid">
         <Outlet />
       </main>
     </div>
