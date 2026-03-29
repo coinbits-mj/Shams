@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { LayoutGrid, MessageSquare, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug } from 'lucide-react';
 
 const nav = [
   { to: '/', label: 'mission control', icon: LayoutGrid, end: true },
@@ -12,6 +12,7 @@ const nav = [
   { to: '/briefings', label: 'briefings', icon: FileText },
   { to: '/files', label: 'files', icon: FolderOpen },
   { to: '/mercury', label: 'mercury', icon: Landmark },
+  { to: '/integrations', label: 'integrations', icon: Plug },
 ];
 
 export default function Layout() {

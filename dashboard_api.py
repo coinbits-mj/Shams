@@ -388,6 +388,106 @@ def rumi_scorecard():
     return jsonify(rumi_client.get_scorecard() or {})
 
 
+# ── Integrations ─────────────────────────────────────────────────────────────
+
+@api.route("/integrations/status", methods=["GET"])
+@require_auth
+def integration_status():
+    """Check status of all integrations."""
+    import requests as req
+
+    statuses = {}
+
+    statuses["telegram"] = "connected" if config.TELEGRAM_BOT_TOKEN else "unconfigured"
+    statuses["claude"] = "connected" if config.ANTHROPIC_API_KEY else "unconfigured"
+    statuses["whisper"] = "connected" if config.OPENAI_API_KEY else "unconfigured"
+
+    for key_name, status_key in [
+        ("MERCURY_API_KEY_CLIFTON", "mercury_clifton"),
+        ("MERCURY_API_KEY_PLAINFIELD", "mercury_plainfield"),
+        ("MERCURY_API_KEY_PERSONAL", "mercury_personal"),
+        ("MERCURY_API_KEY_COINBITS", "mercury_coinbits"),
+    ]:
+        statuses[status_key] = "connected" if getattr(config, key_name, "") else "unconfigured"
+
+    try:
+        r = req.get(f"{config.RUMI_BASE_URL}/health", timeout=5)
+        statuses["rumi"] = "connected" if r.ok else "error"
+    except Exception:
+        statuses["rumi"] = "error"
+
+    statuses["resend"] = "connected" if config.RESEND_API_KEY else "unconfigured"
+
+    google_ok = bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)
+    statuses["google_calendar"] = "connected" if google_ok else "unconfigured"
+    statuses["gmail"] = "connected" if google_ok else "unconfigured"
+
+    rumi_ok = statuses["rumi"] == "connected"
+    statuses["square"] = "connected" if rumi_ok else "unconfigured"
+    statuses["marginedge"] = "connected" if rumi_ok else "unconfigured"
+    statuses["slack"] = "connected" if rumi_ok else "unconfigured"
+
+    statuses["leo"] = "unconfigured"
+
+    return jsonify(statuses)
+
+
+@api.route("/integrations/google/connect", methods=["GET"])
+@require_auth
+def google_oauth_start():
+    """Start Google OAuth flow — redirects user to Google consent screen."""
+    if not config.GOOGLE_CLIENT_ID:
+        return jsonify({"error": "GOOGLE_CLIENT_ID not configured"}), 400
+
+    base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
+    redirect_uri = f"{base_url}/api/integrations/google/callback"
+    scopes = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly"
+
+    auth_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={config.GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={redirect_uri}&"
+        f"response_type=code&"
+        f"scope={scopes}&"
+        f"access_type=offline&"
+        f"prompt=consent"
+    )
+    return jsonify({"url": auth_url})
+
+
+@api.route("/integrations/google/callback", methods=["GET"])
+def google_oauth_callback():
+    """Handle Google OAuth callback — exchange code for tokens."""
+    code = request.args.get("code")
+    if not code:
+        return "Missing code", 400
+
+    base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
+    redirect_uri = f"{base_url}/api/integrations/google/callback"
+
+    import requests as req
+    r = req.post("https://oauth2.googleapis.com/token", data={
+        "code": code,
+        "client_id": config.GOOGLE_CLIENT_ID,
+        "client_secret": config.GOOGLE_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code",
+    })
+
+    if r.ok:
+        tokens = r.json()
+        # Store tokens in memory table
+        memory.remember("google_access_token", tokens.get("access_token", ""))
+        memory.remember("google_refresh_token", tokens.get("refresh_token", ""))
+        memory.remember("google_token_expiry", str(tokens.get("expires_in", 0)))
+        logger.info("Google OAuth connected successfully")
+        # Redirect back to integrations page
+        return f'<html><script>window.location.href="/integrations";</script><p>Connected! Redirecting...</p></html>'
+    else:
+        logger.error(f"Google OAuth error: {r.status_code} {r.text}")
+        return f"OAuth failed: {r.text}", 400
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 @api.route("/agents", methods=["GET"])

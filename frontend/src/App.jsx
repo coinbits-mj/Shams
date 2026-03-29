@@ -10,6 +10,7 @@ import Decisions from './pages/Decisions';
 import Briefings from './pages/Briefings';
 import Files from './pages/Files';
 import Mercury from './pages/Mercury';
+import Integrations from './pages/Integrations';
 import Conversations from './pages/Conversations';
 
 function ProtectedRoute({ children }) {
@@ -32,6 +33,7 @@ export default function App() {
           <Route path="briefings" element={<Briefings />} />
           <Route path="files" element={<Files />} />
           <Route path="mercury" element={<Mercury />} />
+          <Route path="integrations" element={<Integrations />} />
         </Route>
       </Routes>
     </BrowserRouter>
