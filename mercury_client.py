@@ -23,13 +23,13 @@ BASE_URL = "https://api.mercury.com/api/v1"
 # Registry of all Mercury accounts
 ACCOUNTS = {}
 if MERCURY_API_KEY_CLIFTON:
-    ACCOUNTS["clifton"] = {"key": MERCURY_API_KEY_CLIFTON, "label": "QCC Clifton"}
+    ACCOUNTS["clifton"] = {"key": MERCURY_API_KEY_CLIFTON, "label": "QCC Clifton", "ownership": 0.51}
 if MERCURY_API_KEY_PLAINFIELD:
-    ACCOUNTS["plainfield"] = {"key": MERCURY_API_KEY_PLAINFIELD, "label": "QCC Plainfield & Production"}
+    ACCOUNTS["plainfield"] = {"key": MERCURY_API_KEY_PLAINFIELD, "label": "QCC Plainfield & Production", "ownership": 1.0}
 if MERCURY_API_KEY_PERSONAL:
-    ACCOUNTS["personal"] = {"key": MERCURY_API_KEY_PERSONAL, "label": "Personal"}
+    ACCOUNTS["personal"] = {"key": MERCURY_API_KEY_PERSONAL, "label": "Personal", "ownership": 1.0}
 if MERCURY_API_KEY_COINBITS:
-    ACCOUNTS["coinbits"] = {"key": MERCURY_API_KEY_COINBITS, "label": "Coinbits"}
+    ACCOUNTS["coinbits"] = {"key": MERCURY_API_KEY_COINBITS, "label": "Coinbits", "ownership": 0.40}
 
 
 def _headers(api_key: str) -> dict:
@@ -88,6 +88,7 @@ def get_balances(account_name: str | None = None) -> dict:
                 "account_name": acct_name,
                 "kind": kind,
                 "balance": bal,
+                "ownership": info.get("ownership", 1.0),
             })
 
             if kind == "checking":
@@ -151,6 +152,13 @@ def get_cash_summary() -> str:
     if balances["total_credit_card"] != 0:
         lines.append(f"**Credit Cards: ${balances['total_credit_card']:,.2f}**")
     lines.append(f"**Grand Total: ${balances['grand_total']:,.2f}**")
+
+    # Ownership-weighted view
+    weighted = 0.0
+    for acct in balances["accounts"]:
+        weighted += acct["balance"] * acct.get("ownership", 1.0)
+    lines.append(f"**Maher's Share (ownership-weighted): ${weighted:,.2f}**")
+    lines.append("_Clifton 51% (w/ Monica), Plainfield+Production 100%, Personal 100%, Coinbits 40%_")
 
     txns = get_recent_transactions(days=3)
     if txns:
