@@ -152,6 +152,8 @@ def process_message(msg: dict, chat_id: str):
 
         reply = claude_client.chat(caption or "What's in this image?", images=images)
         send_telegram(chat_id, reply)
+        memory.save_file("photo.jpg", "photo", "image/jpeg", len(img_bytes),
+                         telegram_file_id=file_id, summary=reply[:500])
         logger.info(f"Photo reply sent ({len(reply)} chars)")
         return
 
@@ -168,6 +170,8 @@ def process_message(msg: dict, chat_id: str):
         # Send transcript + Shams reply
         reply = claude_client.chat(f"[Voice message transcription]: {transcript}")
         send_telegram(chat_id, reply)
+        memory.save_file(f"voice_{duration}s.ogg", "voice", "audio/ogg", len(audio_bytes),
+                         telegram_file_id=file_id, transcript=transcript, summary=reply[:500])
         logger.info(f"Voice reply sent ({len(reply)} chars)")
         return
 
@@ -182,6 +186,8 @@ def process_message(msg: dict, chat_id: str):
 
         reply = claude_client.chat(f"[Audio transcription]: {transcript}")
         send_telegram(chat_id, reply)
+        memory.save_file(msg["audio"].get("file_name", "audio.ogg"), "voice", "audio/ogg", len(audio_bytes),
+                         telegram_file_id=file_id, transcript=transcript, summary=reply[:500])
         logger.info(f"Audio reply sent ({len(reply)} chars)")
         return
 
@@ -209,6 +215,12 @@ def process_message(msg: dict, chat_id: str):
             reply = claude_client.chat(prompt)
 
         send_telegram(chat_id, reply)
+        ftype = "pdf" if file_name.lower().endswith(".pdf") else "document"
+        if mime and mime.startswith("image/"):
+            ftype = "photo"
+        memory.save_file(file_name, ftype, mime, len(file_bytes),
+                         telegram_file_id=file_id, summary=reply[:500],
+                         transcript=doc_text if not mime.startswith("image/") else "")
         logger.info(f"Document reply sent ({len(reply)} chars)")
         return
 
@@ -271,6 +283,12 @@ def telegram_polling():
         except Exception as e:
             logger.error(f"Telegram polling error: {e}", exc_info=True)
             time.sleep(5)
+
+
+# ── Dashboard API ────────────────────────────────────────────────────────────
+
+from dashboard_api import api as dashboard_blueprint
+app.register_blueprint(dashboard_blueprint)
 
 
 # ── Health & test endpoints ──────────────────────────────────────────────────
@@ -340,6 +358,22 @@ if __name__ == "__main__":
         t.start()
     else:
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
+
+    # Serve React frontend (SPA catch-all)
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_frontend(path):
+        import os
+        static_dir = os.path.join(os.path.dirname(__file__), "frontend", "dist")
+        file_path = os.path.join(static_dir, path)
+        if path and os.path.exists(file_path):
+            from flask import send_from_directory
+            return send_from_directory(static_dir, path)
+        index = os.path.join(static_dir, "index.html")
+        if os.path.exists(index):
+            from flask import send_from_directory
+            return send_from_directory(static_dir, "index.html")
+        return jsonify({"service": "shams", "status": "no frontend built yet"}), 200
 
     # Flask
     app.run(host="0.0.0.0", port=config.FLASK_PORT)

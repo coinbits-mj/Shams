@@ -127,6 +127,114 @@ def get_last_briefing(briefing_type: str) -> dict | None:
         return cur.fetchone()
 
 
+# ── Files & Folders ──────────────────────────────────────────────────────────
+
+def create_folder(name: str, parent_id: int | None = None) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}folders (name, parent_id) VALUES (%s, %s) RETURNING id",
+            (name, parent_id),
+        )
+        return cur.fetchone()[0]
+
+
+def get_folders(parent_id: int | None = None) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if parent_id is None:
+            cur.execute(f"SELECT * FROM {P}folders WHERE parent_id IS NULL ORDER BY name")
+        else:
+            cur.execute(f"SELECT * FROM {P}folders WHERE parent_id = %s ORDER BY name", (parent_id,))
+        return cur.fetchall()
+
+
+def save_file(filename: str, file_type: str, mime_type: str = "", file_size: int = 0,
+              folder_id: int | None = None, telegram_file_id: str = "",
+              summary: str = "", transcript: str = "", tags: list = None,
+              conversation_id: int | None = None) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}files (filename, file_type, mime_type, file_size, folder_id, "
+            f"telegram_file_id, summary, transcript, tags, conversation_id) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (filename, file_type, mime_type, file_size, folder_id,
+             telegram_file_id, summary, transcript, tags or [], conversation_id),
+        )
+        return cur.fetchone()[0]
+
+
+def get_files(folder_id: int | None = None, file_type: str | None = None,
+              limit: int = 50) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conditions = []
+        params = []
+        if folder_id is not None:
+            conditions.append("folder_id = %s")
+            params.append(folder_id)
+        if file_type:
+            conditions.append("file_type = %s")
+            params.append(file_type)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        cur.execute(f"SELECT * FROM {P}files {where} ORDER BY uploaded_at DESC LIMIT %s", params)
+        return cur.fetchall()
+
+
+def get_file(file_id: int) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}files WHERE id = %s", (file_id,))
+        return cur.fetchone()
+
+
+# ── Sessions & Auth ──────────────────────────────────────────────────────────
+
+def create_session(email: str, token: str, hours: int = 168) -> None:
+    from datetime import timedelta
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}sessions (token, email, expires_at) VALUES (%s, %s, NOW() + %s)",
+            (token, email, timedelta(hours=hours)),
+        )
+
+
+def validate_session(token: str) -> str | None:
+    """Returns email if valid, None otherwise."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT email FROM {P}sessions WHERE token = %s AND expires_at > NOW()",
+            (token,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def delete_session(token: str):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {P}sessions WHERE token = %s", (token,))
+
+
+def create_magic_link(email: str, token: str, minutes: int = 15) -> None:
+    from datetime import timedelta
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}magic_links (token, email, expires_at) VALUES (%s, %s, NOW() + %s)",
+            (token, email, timedelta(minutes=minutes)),
+        )
+
+
+def validate_magic_link(token: str) -> str | None:
+    """Returns email if valid and unused, None otherwise. Marks as used."""
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT id, email FROM {P}magic_links WHERE token = %s AND used = FALSE AND expires_at > NOW()",
+            (token,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        cur.execute(f"UPDATE {P}magic_links SET used = TRUE WHERE id = %s", (row[0],))
+        return row[1]
+
+
 # ── Schema bootstrap ─────────────────────────────────────────────────────────
 
 def ensure_tables():
