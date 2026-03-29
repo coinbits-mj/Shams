@@ -12,7 +12,8 @@ import logging
 import requests
 from datetime import date, timedelta
 from config import (
-    MERCURY_API_KEY_CLIFTON, MERCURY_API_KEY_PLAINFIELD, MERCURY_API_KEY_PERSONAL,
+    MERCURY_API_KEY_CLIFTON, MERCURY_API_KEY_PLAINFIELD,
+    MERCURY_API_KEY_PERSONAL, MERCURY_API_KEY_COINBITS,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ if MERCURY_API_KEY_PLAINFIELD:
     ACCOUNTS["plainfield"] = {"key": MERCURY_API_KEY_PLAINFIELD, "label": "QCC Plainfield & Production"}
 if MERCURY_API_KEY_PERSONAL:
     ACCOUNTS["personal"] = {"key": MERCURY_API_KEY_PERSONAL, "label": "Personal"}
+if MERCURY_API_KEY_COINBITS:
+    ACCOUNTS["coinbits"] = {"key": MERCURY_API_KEY_COINBITS, "label": "Coinbits"}
 
 
 def _headers(api_key: str) -> dict:

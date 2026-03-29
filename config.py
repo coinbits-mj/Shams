@@ -25,6 +25,7 @@ RUMI_BASE_URL = os.environ.get("RUMI_BASE_URL", "http://localhost:8080")
 MERCURY_API_KEY_CLIFTON = os.environ.get("MERCURY_API_KEY_CLIFTON", os.environ.get("MERCURY_API_KEY", ""))
 MERCURY_API_KEY_PLAINFIELD = os.environ.get("MERCURY_API_KEY_PLAINFIELD", "")
 MERCURY_API_KEY_PERSONAL = os.environ.get("MERCURY_API_KEY_PERSONAL", "")
+MERCURY_API_KEY_COINBITS = os.environ.get("MERCURY_API_KEY_COINBITS", "")
 
 # Google
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
