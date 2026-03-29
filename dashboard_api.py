@@ -64,13 +64,31 @@ def login():
     base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
     link = f"{base_url}/api/auth/verify?token={token}"
 
-    # For now, log the link (replace with email sending later)
-    logger.info(f"Magic link for {email}: {link}")
-
-    # TODO: Send email via SMTP or a service
-    # For development, also return the link directly
-    if os.environ.get("DEV_MODE"):
-        resp["dev_link"] = link
+    # Send via Resend
+    if config.RESEND_API_KEY:
+        try:
+            import resend
+            resend.api_key = config.RESEND_API_KEY
+            resend.Emails.send({
+                "from": config.RESEND_FROM_EMAIL,
+                "to": [email],
+                "subject": "Shams — Login Link",
+                "html": f"""
+                <div style="font-family: -apple-system, sans-serif; max-width: 400px; margin: 0 auto; padding: 40px 20px;">
+                    <h1 style="color: #f59e0b; font-size: 24px;">Shams</h1>
+                    <p style="color: #64748b; margin: 16px 0;">Click below to log in to your dashboard:</p>
+                    <a href="{link}" style="display: inline-block; padding: 12px 24px; background: #f59e0b; color: #0f172a; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                        Log In
+                    </a>
+                    <p style="color: #475569; font-size: 12px; margin-top: 24px;">Link expires in 15 minutes.</p>
+                </div>
+                """,
+            })
+            logger.info(f"Magic link sent to {email}")
+        except Exception as e:
+            logger.error(f"Resend email failed: {e}")
+    else:
+        logger.info(f"Magic link (no Resend configured): {link}")
 
     return jsonify(resp)
 
