@@ -21,9 +21,10 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 # Rumi (coffee-pl-bot internal API)
 RUMI_BASE_URL = os.environ.get("RUMI_BASE_URL", "http://localhost:8080")
 
-# Mercury Banking (direct access)
-MERCURY_API_KEY = os.environ.get("MERCURY_API_KEY", "")
-MERCURY_ACCOUNT_ID = os.environ.get("MERCURY_ACCOUNT_ID", "")
+# Mercury Banking (multi-account)
+MERCURY_API_KEY_CLIFTON = os.environ.get("MERCURY_API_KEY_CLIFTON", os.environ.get("MERCURY_API_KEY", ""))
+MERCURY_API_KEY_PLAINFIELD = os.environ.get("MERCURY_API_KEY_PLAINFIELD", "")
+MERCURY_API_KEY_PERSONAL = os.environ.get("MERCURY_API_KEY_PERSONAL", "")
 
 # Google
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")

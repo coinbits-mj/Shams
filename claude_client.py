@@ -63,25 +63,28 @@ TOOLS = [
     },
     {
         "name": "get_mercury_balances",
-        "description": "Get current Mercury bank account balances (checking + credit card). Use this when Maher asks about cash position, bank balance, or how much money is in the accounts.",
+        "description": "Get current Mercury bank account balances across all entities — Clifton, Plainfield (café + production/wholesale), and Personal. Each API key may have multiple sub-accounts (checking, credit card, savings).",
         "input_schema": {
             "type": "object",
-            "properties": {},
+            "properties": {
+                "account": {"type": "string", "description": "Optional: 'clifton', 'plainfield', or 'personal'. Omit for all accounts.", "enum": ["clifton", "plainfield", "personal"]}
+            },
         },
     },
     {
         "name": "get_mercury_transactions",
-        "description": "Get recent Mercury bank transactions. Use this when Maher asks about recent spending, vendor payments, or transaction history.",
+        "description": "Get recent Mercury bank transactions. Can filter by entity (clifton, plainfield, personal) or show all.",
         "input_schema": {
             "type": "object",
             "properties": {
+                "account": {"type": "string", "description": "Optional: 'clifton', 'plainfield', or 'personal'. Omit for all.", "enum": ["clifton", "plainfield", "personal"]},
                 "days": {"type": "integer", "description": "Number of days to look back (default 7)", "default": 7}
             },
         },
     },
     {
         "name": "get_mercury_cash_summary",
-        "description": "Get a formatted cash summary including balances and recent transactions. Great for briefings.",
+        "description": "Get a formatted cash summary across all Mercury accounts (Clifton, Plainfield café + production, Personal) including balances and recent transactions.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -213,13 +216,12 @@ def _execute_tool(name: str, input_data: dict) -> str:
 
         elif name == "get_mercury_balances":
             import mercury_client
-            result = mercury_client.get_balances()
+            result = mercury_client.get_balances(input_data.get("account"))
             return json.dumps(result, indent=2) if result else "Mercury unavailable."
 
         elif name == "get_mercury_transactions":
             import mercury_client
-            days = input_data.get("days", 7)
-            result = mercury_client.get_recent_transactions(days)
+            result = mercury_client.get_recent_transactions(input_data.get("account"), input_data.get("days", 7))
             return json.dumps(result, indent=2) if result else "Mercury unavailable."
 
         elif name == "get_mercury_cash_summary":
