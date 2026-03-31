@@ -165,6 +165,63 @@ TOOLS = [
         },
     },
     {
+        "name": "triage_inbox",
+        "description": "Triage Maher's email inbox. Fetches unread emails, classifies by priority (P1 act now, P2 today, P3 this week, P4 archive), and provides recommended actions + draft replies for important ones. Use this when Maher asks about email, inbox, or 'what needs my attention'.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "max_emails": {"type": "integer", "description": "How many unread emails to process (default 10)", "default": 10}
+            },
+        },
+    },
+    {
+        "name": "read_codebase",
+        "description": "Read a file from any of Maher's codebases (shams, rumi, leo). Use this to understand how something works, review code, or help Builder plan changes.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Which repo: 'shams', 'rumi', or 'leo'", "enum": ["shams", "rumi", "leo"]},
+                "filepath": {"type": "string", "description": "Path to the file, e.g. 'app.py' or 'engine/pl_engine.py'"},
+            },
+            "required": ["repo", "filepath"],
+        },
+    },
+    {
+        "name": "search_codebase",
+        "description": "Search for a string across a codebase. Returns matching files and lines.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Which repo: 'shams', 'rumi', or 'leo'", "enum": ["shams", "rumi", "leo"]},
+                "query": {"type": "string", "description": "Search string"},
+            },
+            "required": ["repo", "query"],
+        },
+    },
+    {
+        "name": "list_codebase_files",
+        "description": "List files in a codebase directory.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Which repo: 'shams', 'rumi', or 'leo'", "enum": ["shams", "rumi", "leo"]},
+                "path": {"type": "string", "description": "Directory path (e.g. 'engine/' or ''  for root)", "default": ""},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
+        "name": "get_repo_structure",
+        "description": "Get a tree view of an entire codebase structure.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Which repo: 'shams', 'rumi', or 'leo'", "enum": ["shams", "rumi", "leo"]},
+            },
+            "required": ["repo"],
+        },
+    },
+    {
         "name": "remember",
         "description": "Save a piece of information to persistent memory. Use this when Maher tells you something important to remember, or when you learn something that should persist across conversations.",
         "input_schema": {
@@ -278,6 +335,46 @@ def _execute_tool(name: str, input_data: dict) -> str:
             import rumi_client
             result = rumi_client.get_inventory_alerts()
             return json.dumps(result, indent=2) if result else "Rumi unavailable."
+
+        elif name == "triage_inbox":
+            import google_client
+            max_emails = input_data.get("max_emails", 10)
+            emails = google_client.get_unread_emails(max_emails)
+            if not emails:
+                return "No unread emails (or Gmail not connected — check Integrations page)."
+            # Load the inbox triage persona for context
+            inbox_persona = _load_context_file("inbox_persona.md")
+            # Format emails for triage
+            email_text = "\n\n".join(
+                f"From: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
+                for e in emails
+            )
+            # Use a sub-call to Claude with the inbox persona
+            triage_response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=2048,
+                system=inbox_persona if inbox_persona else "Triage these emails by priority.",
+                messages=[{"role": "user", "content": f"Triage these {len(emails)} emails:\n\n{email_text}"}],
+            )
+            return triage_response.content[0].text
+
+        elif name == "read_codebase":
+            from agents.codebase import read_file
+            return read_file(input_data["repo"], input_data["filepath"])
+
+        elif name == "search_codebase":
+            from agents.codebase import search_code
+            results = search_code(input_data["repo"], input_data["query"])
+            return json.dumps(results, indent=2) if results else "No matches found."
+
+        elif name == "list_codebase_files":
+            from agents.codebase import list_files
+            files = list_files(input_data["repo"], input_data.get("path", ""))
+            return "\n".join(files) if files else "No files found."
+
+        elif name == "get_repo_structure":
+            from agents.codebase import get_repo_structure
+            return get_repo_structure(input_data["repo"])
 
         elif name == "get_leo_health_summary":
             import leo_client

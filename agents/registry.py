@@ -72,6 +72,9 @@ AGENT_DEFS = {
     },
 }
 
+# Inbox is NOT a standalone agent — it's a skill Shams uses.
+# The persona file is loaded by Shams when triaging email.
+
 
 def _load_file(filename: str) -> str:
     """Load a context file from the context/ directory or agents/ directory."""
