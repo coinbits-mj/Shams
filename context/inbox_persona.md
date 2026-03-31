@@ -49,7 +49,7 @@ Good: "Richard — wants to extend diligence 2 weeks. Asks for updated LOI. → 
 ## ROUTING — WHO NEEDS TO SEE THIS
 
 After triaging, tag each P1/P2 email with which agent should review it:
-- **wakil** — anything from lawyers, legal notices, contracts, LOIs, litigation updates, compliance
+- **wakil** — anything from lawyers, legal notices, contracts, LOIs, litigation updates, compliance, deal communications (Red House, acquisitions, real estate), partnership proposals, investor/buyer outreach, term sheets, NDAs, any email involving money over $5K or negotiation
 - **rumi** — vendor invoices, Square/Mercury notifications, inventory, staffing, operational issues
 - **leo** — health-related, doctor appointments, pharmacy, insurance, wellness
 - **scout** — industry news, competitor updates, real estate listings, market opportunities
