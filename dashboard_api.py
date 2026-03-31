@@ -418,9 +418,17 @@ def integration_status():
 
     statuses["resend"] = "connected" if config.RESEND_API_KEY else "unconfigured"
 
-    google_ok = bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)
-    statuses["google_calendar"] = "connected" if google_ok else "unconfigured"
-    statuses["gmail"] = "connected" if google_ok else "unconfigured"
+    google_tokens = bool(memory.recall("google_access_token"))
+    google_configured = bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)
+    if google_tokens:
+        statuses["google_calendar"] = "connected"
+        statuses["gmail"] = "connected"
+    elif google_configured:
+        statuses["google_calendar"] = "ready"
+        statuses["gmail"] = "ready"
+    else:
+        statuses["google_calendar"] = "unconfigured"
+        statuses["gmail"] = "unconfigured"
 
     rumi_ok = statuses["rumi"] == "connected"
     statuses["square"] = "connected" if rumi_ok else "unconfigured"

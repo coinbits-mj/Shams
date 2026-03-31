@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, AlertCircle, Loader, ExternalLink } from 'lucide-
 
 const statusIcon = {
   connected: <CheckCircle size={14} className="text-[var(--green)]" />,
+  ready: <AlertCircle size={14} className="text-[var(--amber)]" />,
   error: <XCircle size={14} className="text-[var(--red)]" />,
   unconfigured: <AlertCircle size={14} className="text-[var(--text-muted)]" />,
   checking: <Loader size={14} className="text-[var(--accent)] animate-spin" />,
@@ -83,7 +84,7 @@ export default function Integrations() {
                       </div>
                       <p className="text-xs text-[var(--text-muted)] mt-0.5">{int.description}</p>
                     </div>
-                    {status === 'unconfigured' && int.oauth && (
+                    {(status === 'unconfigured' || status === 'ready') && int.oauth && (
                       <button
                         onClick={async () => {
                           const data = await get(`/integrations/${int.oauth}/connect`);
