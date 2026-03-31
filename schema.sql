@@ -125,3 +125,12 @@ CREATE INDEX IF NOT EXISTS idx_missions_status ON shams_missions (status);
 CREATE INDEX IF NOT EXISTS idx_missions_agent ON shams_missions (assigned_agent);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_ts ON shams_activity_feed (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_agent ON shams_activity_feed (agent_name, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS shams_group_chat (
+    id              SERIAL PRIMARY KEY,
+    agent_name      VARCHAR(50) NOT NULL,     -- 'maher', 'shams', 'rumi', 'leo'
+    content         TEXT NOT NULL,
+    metadata        JSONB DEFAULT '{}',
+    timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_group_chat_ts ON shams_group_chat (timestamp DESC);

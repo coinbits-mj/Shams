@@ -1,0 +1,145 @@
+import { useState, useRef, useEffect } from 'react';
+import { post, get } from '../api';
+import { Send, Sun, Activity, Heart } from 'lucide-react';
+
+const agentConfig = {
+  maher: { color: '#e2e8f0', icon: null, label: 'Maher' },
+  shams: { color: '#f59e0b', icon: Sun, label: 'Shams' },
+  rumi: { color: '#06b6d4', icon: Activity, label: 'Rumi' },
+  leo: { color: '#22c55e', icon: Heart, label: 'Leo' },
+};
+
+export default function WarRoom() {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    get('/group-chat/history?limit=50').then(d => d && setMessages(d));
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  async function handleSend(e) {
+    e.preventDefault();
+    if (!input.trim() || loading) return;
+    const msg = input.trim();
+    setInput('');
+
+    // Add user message immediately
+    setMessages(prev => [...prev, { agent_name: 'maher', content: msg, timestamp: new Date().toISOString() }]);
+    setLoading(true);
+
+    const data = await post('/group-chat', { message: msg });
+    if (data?.responses) {
+      const newMsgs = data.responses.map(r => ({
+        agent_name: r.agent,
+        content: r.content,
+        timestamp: new Date().toISOString(),
+      }));
+      setMessages(prev => [...prev, ...newMsgs]);
+    }
+    setLoading(false);
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="border-b border-[var(--border)] px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-[var(--green)] pulse-active" />
+          <h2 className="mono-heading text-lg">war room</h2>
+        </div>
+        <div className="flex items-center gap-4">
+          {['shams', 'rumi', 'leo'].map(name => {
+            const cfg = agentConfig[name];
+            const Icon = cfg.icon;
+            return (
+              <div key={name} className="flex items-center gap-1.5">
+                <Icon size={12} style={{ color: cfg.color }} />
+                <span className="mono-heading text-xs" style={{ color: cfg.color }}>{cfg.label}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-auto px-6 py-4 space-y-3">
+        {messages.map((m, i) => {
+          const cfg = agentConfig[m.agent_name] || agentConfig.maher;
+          const Icon = cfg.icon;
+          const isUser = m.agent_name === 'maher';
+
+          return (
+            <div key={i} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] ${isUser ? '' : 'flex gap-3'}`}>
+                {!isUser && (
+                  <div className="flex-shrink-0 mt-1">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                      style={{ backgroundColor: `${cfg.color}15`, border: `1px solid ${cfg.color}30` }}>
+                      {Icon && <Icon size={14} style={{ color: cfg.color }} />}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  {!isUser && (
+                    <span className="mono-heading text-[11px] ml-1 mb-1 block" style={{ color: cfg.color }}>
+                      {cfg.label}
+                    </span>
+                  )}
+                  <div className={`rounded-xl px-4 py-3 text-sm whitespace-pre-wrap ${
+                    isUser
+                      ? 'bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)]'
+                      : 'border'
+                  }`}
+                    style={!isUser ? {
+                      backgroundColor: `${cfg.color}08`,
+                      borderColor: `${cfg.color}20`,
+                      color: 'var(--text-primary)',
+                    } : {}}>
+                    {m.content}
+                  </div>
+                  <span className="text-[10px] text-[var(--text-muted)] ml-1 mt-0.5 block">
+                    {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {loading && (
+          <div className="flex justify-start">
+            <div className="flex gap-3">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-[var(--amber-glow)] border border-[rgba(245,158,11,0.3)]">
+                <Sun size={14} className="text-[var(--amber)] pulse-active" />
+              </div>
+              <div>
+                <span className="mono-heading text-[11px] text-[var(--text-muted)] ml-1 mb-1 block">agents thinking...</span>
+                <div className="glass-card rounded-xl px-4 py-3 text-sm text-[var(--text-muted)]">
+                  <span className="pulse-active inline-block">gathering intel from all agents...</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Input */}
+      <form onSubmit={handleSend} className="border-t border-[var(--border)] px-6 py-4 flex gap-3">
+        <input type="text" value={input} onChange={e => setInput(e.target.value)}
+          placeholder="message the squad..."
+          className="flex-1 px-4 py-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] mono-heading text-sm" />
+        <button type="submit" disabled={loading}
+          className="px-4 py-3 bg-[var(--accent)] hover:bg-[#60ccf8] text-[var(--bg-deep)] rounded-xl transition-colors disabled:opacity-50">
+          <Send size={16} />
+        </button>
+      </form>
+    </div>
+  );
+}

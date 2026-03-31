@@ -1,9 +1,10 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { LayoutGrid, MessageSquare, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug } from 'lucide-react';
 
 const nav = [
   { to: '/', label: 'mission control', icon: LayoutGrid, end: true },
+  { to: '/war-room', label: 'war room', icon: Users },
   { to: '/chat', label: 'chat', icon: MessageSquare },
   { to: '/conversations', label: 'history', icon: History },
   { to: '/memory', label: 'memory', icon: Brain },

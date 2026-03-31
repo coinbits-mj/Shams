@@ -15,6 +15,7 @@ import memory
 import claude_client
 import mercury_client
 import rumi_client
+import group_chat
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,35 @@ def chat():
         return jsonify({"error": "message required"}), 400
     reply = claude_client.chat(message)
     return jsonify({"reply": reply})
+
+
+# ── Group Chat (War Room) ────────────────────────────────────────────────────
+
+@api.route("/group-chat", methods=["POST"])
+@require_auth
+def group_chat_send():
+    data = request.get_json(silent=True) or {}
+    message = data.get("message", "").strip()
+    if not message:
+        return jsonify({"error": "message required"}), 400
+    responses = group_chat.send_group_message(message)
+    return jsonify({"responses": responses})
+
+
+@api.route("/group-chat/history", methods=["GET"])
+@require_auth
+def group_chat_history():
+    limit = request.args.get("limit", 50, type=int)
+    messages = memory.get_group_messages(limit)
+    result = []
+    for m in messages:
+        d = dict(m)
+        if d.get("timestamp"):
+            d["timestamp"] = d["timestamp"].isoformat()
+        if d.get("metadata") and isinstance(d["metadata"], str):
+            d["metadata"] = json.loads(d["metadata"])
+        result.append(d)
+    return jsonify(result)
 
 
 @api.route("/conversations", methods=["GET"])

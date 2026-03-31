@@ -4,6 +4,7 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import MissionControl from './pages/MissionControl';
 import Chat from './pages/Chat';
+import WarRoom from './pages/WarRoom';
 import Memory from './pages/Memory';
 import Loops from './pages/Loops';
 import Decisions from './pages/Decisions';
@@ -26,6 +27,7 @@ export default function App() {
           <Route index element={<MissionControl />} />
           <Route path="missions" element={<MissionControl />} />
           <Route path="chat" element={<Chat />} />
+          <Route path="war-room" element={<WarRoom />} />
           <Route path="conversations" element={<Conversations />} />
           <Route path="memory" element={<Memory />} />
           <Route path="loops" element={<Loops />} />

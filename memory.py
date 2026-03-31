@@ -235,6 +235,25 @@ def validate_magic_link(token: str) -> str | None:
         return row[1]
 
 
+# ── Group Chat ────────────────────────────────────────────────────────────────
+
+def save_group_message(agent_name: str, content: str, metadata: dict | None = None):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}group_chat (agent_name, content, metadata) VALUES (%s, %s, %s)",
+            (agent_name, content, json.dumps(metadata or {})),
+        )
+
+
+def get_group_messages(limit: int = 50) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT agent_name, content, metadata, timestamp FROM {P}group_chat "
+            f"ORDER BY timestamp DESC LIMIT %s", (limit,)
+        )
+        return list(reversed(cur.fetchall()))
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 def get_agents() -> list[dict]:
