@@ -20,8 +20,9 @@ const integrationDefs = [
   { id: 'mercury_coinbits', category: 'banking', name: 'Mercury — Coinbits', description: 'Coinbits company banking (40% owned)', envKey: 'mercury_coinbits' },
   { id: 'rumi', category: 'operations', name: 'Rumi (QCC Ops)', description: 'P&L, inventory, labor, scorecard, forecasting', envKey: 'rumi' },
   { id: 'resend', category: 'messaging', name: 'Resend', description: 'Magic link emails from shams@myshams.ai', envKey: 'resend' },
-  { id: 'google_calendar', category: 'productivity', name: 'Google Calendar', description: "MJ's calendar — events, scheduling", envKey: 'google_calendar', oauth: 'google' },
-  { id: 'gmail', category: 'productivity', name: 'Gmail', description: 'Inbox monitoring, email triage', envKey: 'gmail', oauth: 'google' },
+  { id: 'google_personal', category: 'productivity', name: 'Gmail — Personal', description: 'maher.janajri@gmail.com', oauth: 'google', oauthAccount: 'personal' },
+  { id: 'google_coinbits', category: 'productivity', name: 'Gmail — Coinbits', description: 'maher@coinbits.app', oauth: 'google', oauthAccount: 'coinbits' },
+  { id: 'google_qcc', category: 'productivity', name: 'Gmail — QCC', description: 'maher@qcitycoffee.com + Calendar', oauth: 'google', oauthAccount: 'qcc' },
   { id: 'square', category: 'operations', name: 'Square (via Rumi)', description: 'POS sales, items, labor timecards, catalog', envKey: 'square' },
   { id: 'marginedge', category: 'operations', name: 'MarginEdge (via Rumi)', description: 'Food costing, recipe COGS', envKey: 'marginedge' },
   { id: 'slack', category: 'messaging', name: 'Slack (via Rumi)', description: 'QCC team comms, waste logging, shift tasks', envKey: 'slack' },
@@ -87,7 +88,8 @@ export default function Integrations() {
                     {(status === 'unconfigured' || status === 'ready') && int.oauth && (
                       <button
                         onClick={async () => {
-                          const data = await get(`/integrations/${int.oauth}/connect`);
+                          const acct = int.oauthAccount ? `?account=${int.oauthAccount}` : '';
+                          const data = await get(`/integrations/${int.oauth}/connect${acct}`);
                           if (data?.url) window.location.href = data.url;
                         }}
                         className="flex items-center gap-1 px-3 py-1.5 bg-[var(--accent)] hover:bg-[#60ccf8] text-[var(--bg-deep)] rounded-lg text-xs mono-heading transition-colors"

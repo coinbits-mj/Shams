@@ -448,17 +448,15 @@ def integration_status():
 
     statuses["resend"] = "connected" if config.RESEND_API_KEY else "unconfigured"
 
-    google_tokens = bool(memory.recall("google_access_token"))
     google_configured = bool(config.GOOGLE_CLIENT_ID and config.GOOGLE_CLIENT_SECRET)
-    if google_tokens:
-        statuses["google_calendar"] = "connected"
-        statuses["gmail"] = "connected"
-    elif google_configured:
-        statuses["google_calendar"] = "ready"
-        statuses["gmail"] = "ready"
-    else:
-        statuses["google_calendar"] = "unconfigured"
-        statuses["gmail"] = "unconfigured"
+    for acct_key, acct_email in config.GOOGLE_ACCOUNTS.items():
+        has_token = bool(memory.recall(f"google_{acct_key}_access_token"))
+        if has_token:
+            statuses[f"google_{acct_key}"] = "connected"
+        elif google_configured:
+            statuses[f"google_{acct_key}"] = "ready"
+        else:
+            statuses[f"google_{acct_key}"] = "unconfigured"
 
     rumi_ok = statuses["rumi"] == "connected"
     statuses["square"] = "connected" if rumi_ok else "unconfigured"
@@ -481,9 +479,12 @@ def integration_status():
 @api.route("/integrations/google/connect", methods=["GET"])
 @require_auth
 def google_oauth_start():
-    """Start Google OAuth flow — redirects user to Google consent screen."""
+    """Start Google OAuth flow for a specific account."""
     if not config.GOOGLE_CLIENT_ID:
         return jsonify({"error": "GOOGLE_CLIENT_ID not configured"}), 400
+
+    account = request.args.get("account", "personal")
+    email_hint = config.GOOGLE_ACCOUNTS.get(account, "")
 
     base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
     redirect_uri = f"{base_url}/api/integrations/google/callback"
@@ -496,7 +497,9 @@ def google_oauth_start():
         f"response_type=code&"
         f"scope={scopes}&"
         f"access_type=offline&"
-        f"prompt=consent"
+        f"prompt=consent&"
+        f"state={account}&"
+        f"login_hint={email_hint}"
     )
     return jsonify({"url": auth_url})
 
@@ -505,6 +508,7 @@ def google_oauth_start():
 def google_oauth_callback():
     """Handle Google OAuth callback — exchange code for tokens."""
     code = request.args.get("code")
+    account = request.args.get("state", "personal")
     if not code:
         return "Missing code", 400
 
@@ -522,13 +526,12 @@ def google_oauth_callback():
 
     if r.ok:
         tokens = r.json()
-        # Store tokens in memory table
-        memory.remember("google_access_token", tokens.get("access_token", ""))
-        memory.remember("google_refresh_token", tokens.get("refresh_token", ""))
-        memory.remember("google_token_expiry", str(tokens.get("expires_in", 0)))
-        logger.info("Google OAuth connected successfully")
-        # Redirect back to integrations page
-        return f'<html><script>window.location.href="/integrations";</script><p>Connected! Redirecting...</p></html>'
+        # Store tokens per account
+        memory.remember(f"google_{account}_access_token", tokens.get("access_token", ""))
+        memory.remember(f"google_{account}_refresh_token", tokens.get("refresh_token", ""))
+        memory.remember(f"google_{account}_expiry", str(tokens.get("expires_in", 0)))
+        logger.info(f"Google OAuth connected for {account} ({config.GOOGLE_ACCOUNTS.get(account, '')})")
+        return f'<html><script>window.location.href="/integrations";</script><p>{account} connected! Redirecting...</p></html>'
     else:
         logger.error(f"Google OAuth error: {r.status_code} {r.text}")
         return f"OAuth failed: {r.text}", 400

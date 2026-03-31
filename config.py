@@ -32,10 +32,16 @@ MERCURY_API_KEY_PLAINFIELD = os.environ.get("MERCURY_API_KEY_PLAINFIELD", "")
 MERCURY_API_KEY_PERSONAL = os.environ.get("MERCURY_API_KEY_PERSONAL", "")
 MERCURY_API_KEY_COINBITS = os.environ.get("MERCURY_API_KEY_COINBITS", "")
 
-# Google
+# Google OAuth (supports multiple accounts)
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "")
+
+# Accounts to connect
+GOOGLE_ACCOUNTS = {
+    "personal": "maher.janajri@gmail.com",
+    "coinbits": "maher@coinbits.app",
+    "qcc": "maher@qcitycoffee.com",
+}
 
 # Resend (email for magic links)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")

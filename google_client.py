@@ -1,107 +1,151 @@
-"""Gmail + Google Calendar integration."""
+"""Gmail + Google Calendar — multi-account support for all three inboxes."""
+
+from __future__ import annotations
 
 import logging
+import requests
 from datetime import datetime, timedelta
-from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
+from config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ACCOUNTS
+import memory
 
 logger = logging.getLogger(__name__)
 
-_GOOGLE_AVAILABLE = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
-if _GOOGLE_AVAILABLE:
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    from google.auth.transport.requests import Request
-    from googleapiclient.discovery import build
-else:
-    logger.warning("Google credentials not set — Gmail/Calendar disabled")
+def _get_access_token(account_key: str) -> str | None:
+    """Get a valid access token for an account, refreshing if needed."""
+    token = memory.recall(f"google_{account_key}_access_token")
+    if not token:
+        return None
 
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly",
-]
+    # Try to use it — if it fails, refresh
+    r = requests.get("https://www.googleapis.com/oauth2/v1/tokeninfo",
+                      params={"access_token": token}, timeout=10)
+    if r.ok:
+        return token
 
-TOKEN_PATH = "token.json"
-CREDENTIALS_PATH = "credentials.json"
+    # Refresh
+    refresh_token = memory.recall(f"google_{account_key}_refresh_token")
+    if not refresh_token:
+        return None
 
+    r = requests.post("https://oauth2.googleapis.com/token", data={
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }, timeout=15)
 
-def _get_creds():
-    import pathlib
+    if r.ok:
+        new_token = r.json().get("access_token")
+        memory.remember(f"google_{account_key}_access_token", new_token)
+        return new_token
 
-    token_path = pathlib.Path(TOKEN_PATH)
-    creds = None
-
-    if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        token_path.write_text(creds.to_json())
-
-    return creds
+    logger.error(f"Google token refresh failed for {account_key}: {r.text}")
+    return None
 
 
-# ── Gmail ────────────────────────────────────────────────────────────────────
+def _gmail_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ── Gmail — Multi-account ────────────────────────────────────────────────────
 
 def get_unread_emails(max_results: int = 10) -> list[dict]:
-    """Fetch unread emails — returns list of {subject, from, snippet, date}."""
-    if not _GOOGLE_AVAILABLE:
-        return []
-    try:
-        service = build("gmail", "v1", credentials=_get_creds())
-        results = service.users().messages().list(
-            userId="me", q="is:unread", maxResults=max_results
-        ).execute()
-        messages = results.get("messages", [])
+    """Fetch unread emails from ALL connected accounts."""
+    all_emails = []
+    for account_key, email_addr in GOOGLE_ACCOUNTS.items():
+        token = _get_access_token(account_key)
+        if not token:
+            continue
+        try:
+            emails = _fetch_emails_for_account(token, email_addr, account_key, max_results)
+            all_emails.extend(emails)
+        except Exception as e:
+            logger.error(f"Gmail error for {account_key}: {e}")
 
-        emails = []
-        for msg in messages:
-            detail = service.users().messages().get(userId="me", id=msg["id"], format="metadata").execute()
-            headers = {h["name"]: h["value"] for h in detail.get("payload", {}).get("headers", [])}
-            emails.append({
-                "subject": headers.get("Subject", ""),
-                "from": headers.get("From", ""),
-                "snippet": detail.get("snippet", ""),
-                "date": headers.get("Date", ""),
-            })
-        return emails
-    except Exception as e:
-        logger.error(f"Gmail error: {e}")
+    # Sort by date (newest first) and cap total
+    all_emails.sort(key=lambda e: e.get("date", ""), reverse=True)
+    return all_emails[:max_results]
+
+
+def get_unread_emails_for_account(account_key: str, max_results: int = 10) -> list[dict]:
+    """Fetch unread emails from a specific account."""
+    token = _get_access_token(account_key)
+    if not token:
         return []
+    email_addr = GOOGLE_ACCOUNTS.get(account_key, account_key)
+    return _fetch_emails_for_account(token, email_addr, account_key, max_results)
+
+
+def _fetch_emails_for_account(token: str, email_addr: str, account_key: str,
+                               max_results: int) -> list[dict]:
+    """Fetch unread emails for one account."""
+    headers = _gmail_headers(token)
+
+    r = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                      headers=headers, params={"q": "is:unread", "maxResults": max_results},
+                      timeout=15)
+    if not r.ok:
+        logger.error(f"Gmail list error for {account_key}: {r.status_code}")
+        return []
+
+    messages = r.json().get("messages", [])
+    emails = []
+
+    for msg in messages:
+        detail = requests.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+            headers=headers, params={"format": "metadata"}, timeout=15
+        )
+        if not detail.ok:
+            continue
+        data = detail.json()
+        hdrs = {h["name"]: h["value"] for h in data.get("payload", {}).get("headers", [])}
+        emails.append({
+            "account": account_key,
+            "account_email": email_addr,
+            "subject": hdrs.get("Subject", ""),
+            "from": hdrs.get("From", ""),
+            "snippet": data.get("snippet", ""),
+            "date": hdrs.get("Date", ""),
+            "message_id": msg["id"],
+        })
+
+    return emails
 
 
 # ── Google Calendar ──────────────────────────────────────────────────────────
 
 def get_todays_events() -> list[dict]:
-    """Fetch today's calendar events — returns list of {summary, start, end, location}."""
-    if not _GOOGLE_AVAILABLE:
+    """Fetch today's events from the QCC account (primary calendar)."""
+    token = _get_access_token("qcc")
+    if not token:
+        # Fall back to personal
+        token = _get_access_token("personal")
+    if not token:
         return []
-    try:
-        service = build("calendar", "v3", credentials=_get_creds())
-        now = datetime.utcnow()
-        start_of_day = now.replace(hour=0, minute=0, second=0).isoformat() + "Z"
-        end_of_day = now.replace(hour=23, minute=59, second=59).isoformat() + "Z"
 
-        results = service.events().list(
-            calendarId="primary",
-            timeMin=start_of_day,
-            timeMax=end_of_day,
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
+    try:
+        headers = _gmail_headers(token)
+        now = datetime.utcnow()
+        start = now.replace(hour=0, minute=0, second=0).isoformat() + "Z"
+        end = now.replace(hour=23, minute=59, second=59).isoformat() + "Z"
+
+        r = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                          headers=headers, params={
+                              "timeMin": start, "timeMax": end,
+                              "singleEvents": True, "orderBy": "startTime",
+                          }, timeout=15)
+        if not r.ok:
+            return []
 
         events = []
-        for event in results.get("items", []):
-            start = event.get("start", {}).get("dateTime", event.get("start", {}).get("date", ""))
-            end = event.get("end", {}).get("dateTime", event.get("end", {}).get("date", ""))
+        for event in r.json().get("items", []):
+            s = event.get("start", {}).get("dateTime", event.get("start", {}).get("date", ""))
+            e = event.get("end", {}).get("dateTime", event.get("end", {}).get("date", ""))
             events.append({
                 "summary": event.get("summary", ""),
-                "start": start,
-                "end": end,
+                "start": s, "end": e,
                 "location": event.get("location", ""),
             })
         return events
@@ -112,21 +156,21 @@ def get_todays_events() -> list[dict]:
 
 def get_upcoming_events(days: int = 7) -> list[dict]:
     """Fetch events for the next N days."""
-    if not _GOOGLE_AVAILABLE:
+    token = _get_access_token("qcc") or _get_access_token("personal")
+    if not token:
         return []
-    try:
-        service = build("calendar", "v3", credentials=_get_creds())
-        now = datetime.utcnow()
-        time_min = now.isoformat() + "Z"
-        time_max = (now + timedelta(days=days)).isoformat() + "Z"
 
-        results = service.events().list(
-            calendarId="primary",
-            timeMin=time_min,
-            timeMax=time_max,
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
+    try:
+        headers = _gmail_headers(token)
+        now = datetime.utcnow()
+        r = requests.get("https://www.googleapis.com/calendar/v3/calendars/primary/events",
+                          headers=headers, params={
+                              "timeMin": now.isoformat() + "Z",
+                              "timeMax": (now + timedelta(days=days)).isoformat() + "Z",
+                              "singleEvents": True, "orderBy": "startTime",
+                          }, timeout=15)
+        if not r.ok:
+            return []
 
         return [
             {
@@ -135,7 +179,7 @@ def get_upcoming_events(days: int = 7) -> list[dict]:
                 "end": e.get("end", {}).get("dateTime", e.get("end", {}).get("date", "")),
                 "location": e.get("location", ""),
             }
-            for e in results.get("items", [])
+            for e in r.json().get("items", [])
         ]
     except Exception as e:
         logger.error(f"Calendar error: {e}")
