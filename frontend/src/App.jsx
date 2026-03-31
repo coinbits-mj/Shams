@@ -13,6 +13,9 @@ import Files from './pages/Files';
 import Mercury from './pages/Mercury';
 import Integrations from './pages/Integrations';
 import Conversations from './pages/Conversations';
+import Actions from './pages/Actions';
+import Inbox from './pages/Inbox';
+import Settings from './pages/Settings';
 
 function ProtectedRoute({ children }) {
   return getSession() ? children : <Navigate to="/login" />;
@@ -26,6 +29,8 @@ export default function App() {
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
           <Route index element={<MissionControl />} />
           <Route path="missions" element={<MissionControl />} />
+          <Route path="actions" element={<Actions />} />
+          <Route path="inbox" element={<Inbox />} />
           <Route path="chat" element={<Chat />} />
           <Route path="war-room" element={<WarRoom />} />
           <Route path="conversations" element={<Conversations />} />
@@ -36,6 +41,7 @@ export default function App() {
           <Route path="files" element={<Files />} />
           <Route path="mercury" element={<Mercury />} />
           <Route path="integrations" element={<Integrations />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </BrowserRouter>

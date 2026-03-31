@@ -322,14 +322,175 @@ def log_activity(agent_name: str, event_type: str, content: str, metadata: dict 
         )
 
 
-def get_activity_feed(limit: int = 50, agent: str | None = None) -> list[dict]:
+def get_activity_feed(limit: int = 50, agent: str | None = None,
+                      event_type: str | None = None) -> list[dict]:
     with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conditions, params = [], []
         if agent:
-            cur.execute(f"SELECT * FROM {P}activity_feed WHERE agent_name = %s ORDER BY timestamp DESC LIMIT %s",
-                        (agent, limit))
-        else:
-            cur.execute(f"SELECT * FROM {P}activity_feed ORDER BY timestamp DESC LIMIT %s", (limit,))
+            conditions.append("agent_name = %s")
+            params.append(agent)
+        if event_type:
+            conditions.append("event_type = %s")
+            params.append(event_type)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        cur.execute(f"SELECT * FROM {P}activity_feed {where} ORDER BY timestamp DESC LIMIT %s", params)
         return cur.fetchall()
+
+
+# ── Email Triage ────────────────────────────────────────────────────────────
+
+def save_triage_result(account: str, message_id: str, from_addr: str, subject: str,
+                       snippet: str, priority: str = "P4", routed_to: list | None = None,
+                       action: str = "", draft_reply: str = "") -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}email_triage (account, message_id, from_addr, subject, snippet, "
+            f"priority, routed_to, action, draft_reply) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            f"ON CONFLICT (message_id) DO UPDATE SET "
+            f"priority = EXCLUDED.priority, routed_to = EXCLUDED.routed_to, "
+            f"action = EXCLUDED.action, draft_reply = EXCLUDED.draft_reply, triaged_at = NOW() "
+            f"RETURNING id",
+            (account, message_id, from_addr, subject, snippet, priority,
+             routed_to or [], action, draft_reply),
+        )
+        return cur.fetchone()[0]
+
+
+def get_triaged_emails(priority: str | None = None, account: str | None = None,
+                       archived: bool | None = None, limit: int = 100) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conditions, params = [], []
+        if priority:
+            conditions.append("priority = %s")
+            params.append(priority)
+        if account:
+            conditions.append("account = %s")
+            params.append(account)
+        if archived is not None:
+            conditions.append("archived = %s")
+            params.append(archived)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        cur.execute(
+            f"SELECT * FROM {P}email_triage {where} "
+            f"ORDER BY CASE priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 WHEN 'P3' THEN 2 ELSE 3 END, "
+            f"triaged_at DESC LIMIT %s", params
+        )
+        return cur.fetchall()
+
+
+def mark_email_archived(triage_id: int):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"UPDATE {P}email_triage SET archived = TRUE WHERE id = %s", (triage_id,))
+
+
+def batch_archive_emails(triage_ids: list[int]) -> int:
+    if not triage_ids:
+        return 0
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}email_triage SET archived = TRUE WHERE id = ANY(%s) RETURNING id",
+            (triage_ids,),
+        )
+        return cur.rowcount
+
+
+# ── Actions ─────────────────────────────────────────────────────────────────
+
+def create_action(agent_name: str, action_type: str, title: str,
+                  description: str = "", payload: dict | None = None,
+                  mission_id: int | None = None) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}actions (agent_name, action_type, title, description, payload, mission_id) "
+            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (agent_name, action_type, title, description, json.dumps(payload or {}), mission_id),
+        )
+        return cur.fetchone()[0]
+
+
+def get_actions(status: str | None = None, agent: str | None = None,
+                limit: int = 50) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conditions, params = [], []
+        if status:
+            conditions.append("status = %s")
+            params.append(status)
+        if agent:
+            conditions.append("agent_name = %s")
+            params.append(agent)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        params.append(limit)
+        cur.execute(
+            f"SELECT * FROM {P}actions {where} ORDER BY created_at DESC LIMIT %s", params
+        )
+        return cur.fetchall()
+
+
+def get_action(action_id: int) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}actions WHERE id = %s", (action_id,))
+        return cur.fetchone()
+
+
+def update_action_status(action_id: int, status: str, result: str = ""):
+    with _conn() as conn, conn.cursor() as cur:
+        if status in ("approved", "rejected", "completed", "failed"):
+            cur.execute(
+                f"UPDATE {P}actions SET status = %s, result = %s, resolved_at = NOW() WHERE id = %s",
+                (status, result, action_id),
+            )
+        else:
+            cur.execute(
+                f"UPDATE {P}actions SET status = %s WHERE id = %s",
+                (status, action_id),
+            )
+
+
+# ── Trust Scores ────────────────────────────────────────────────────────────
+
+def get_trust_score(agent_name: str) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}trust_scores WHERE agent_name = %s", (agent_name,))
+        return cur.fetchone()
+
+
+def get_all_trust_scores() -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}trust_scores ORDER BY agent_name")
+        return cur.fetchall()
+
+
+def increment_trust(agent_name: str, field: str):
+    """Increment total_proposed, total_approved, or total_rejected."""
+    if field not in ("total_proposed", "total_approved", "total_rejected"):
+        return
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}trust_scores (agent_name, {field}) VALUES (%s, 1) "
+            f"ON CONFLICT (agent_name) DO UPDATE SET {field} = {P}trust_scores.{field} + 1, "
+            f"updated_at = NOW()",
+            (agent_name,),
+        )
+
+
+def set_auto_approve(agent_name: str, enabled: bool):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}trust_scores (agent_name, auto_approve) VALUES (%s, %s) "
+            f"ON CONFLICT (agent_name) DO UPDATE SET auto_approve = %s, updated_at = NOW()",
+            (agent_name, enabled, enabled),
+        )
+
+
+def should_auto_approve(agent_name: str) -> bool:
+    """Check if an agent's actions should be auto-approved."""
+    trust = get_trust_score(agent_name)
+    if not trust:
+        return False
+    return trust["auto_approve"]
 
 
 # ── Schema bootstrap ─────────────────────────────────────────────────────────

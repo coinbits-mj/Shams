@@ -126,6 +126,52 @@ CREATE INDEX IF NOT EXISTS idx_missions_agent ON shams_missions (assigned_agent)
 CREATE INDEX IF NOT EXISTS idx_activity_feed_ts ON shams_activity_feed (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_agent ON shams_activity_feed (agent_name, timestamp DESC);
 
+CREATE TABLE IF NOT EXISTS shams_email_triage (
+    id              SERIAL PRIMARY KEY,
+    account         VARCHAR(50) NOT NULL,
+    message_id      VARCHAR(200) NOT NULL UNIQUE,
+    from_addr       TEXT DEFAULT '',
+    subject         TEXT DEFAULT '',
+    snippet         TEXT DEFAULT '',
+    priority        VARCHAR(5) DEFAULT 'P4',
+    routed_to       TEXT[] DEFAULT '{}',
+    action          TEXT DEFAULT '',
+    draft_reply     TEXT DEFAULT '',
+    archived        BOOLEAN DEFAULT FALSE,
+    triaged_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_email_triage_priority ON shams_email_triage (priority);
+CREATE INDEX IF NOT EXISTS idx_email_triage_account ON shams_email_triage (account);
+CREATE INDEX IF NOT EXISTS idx_email_triage_archived ON shams_email_triage (archived);
+
+CREATE TABLE IF NOT EXISTS shams_actions (
+    id              SERIAL PRIMARY KEY,
+    agent_name      VARCHAR(50) NOT NULL,
+    action_type     VARCHAR(50) NOT NULL,
+    title           VARCHAR(500) NOT NULL,
+    description     TEXT DEFAULT '',
+    payload         JSONB DEFAULT '{}',
+    status          VARCHAR(20) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'executing', 'completed', 'failed')),
+    result          TEXT DEFAULT '',
+    mission_id      INTEGER REFERENCES shams_missions(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at     TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_actions_status ON shams_actions (status);
+CREATE INDEX IF NOT EXISTS idx_actions_agent ON shams_actions (agent_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_actions_created ON shams_actions (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS shams_trust_scores (
+    id              SERIAL PRIMARY KEY,
+    agent_name      VARCHAR(50) NOT NULL UNIQUE,
+    total_proposed  INTEGER DEFAULT 0,
+    total_approved  INTEGER DEFAULT 0,
+    total_rejected  INTEGER DEFAULT 0,
+    auto_approve    BOOLEAN DEFAULT FALSE,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS shams_group_chat (
     id              SERIAL PRIMARY KEY,
     agent_name      VARCHAR(50) NOT NULL,     -- 'maher', 'shams', 'rumi', 'leo'

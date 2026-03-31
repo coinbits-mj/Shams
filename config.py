@@ -43,6 +43,16 @@ GOOGLE_ACCOUNTS = {
     "qcc": "maher@qcitycoffee.com",
 }
 
+# GitHub (Builder agent — PR creation)
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "coinbits-mj")
+
+GITHUB_REPOS = {
+    "shams": "Shams",
+    "rumi": "coffee-pl-bot",
+    "leo": "leo-health-coach",
+}
+
 # Resend (email for magic links)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "shams@updates.qcitycoffee.com")

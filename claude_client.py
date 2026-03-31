@@ -222,6 +222,111 @@ TOOLS = [
         },
     },
     {
+        "name": "create_mission",
+        "description": "Create a new mission (task/project) for an agent to work on. Use this when Maher mentions a task, project, or follow-up that should be tracked. Assign to the right agent based on domain.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short mission title"},
+                "description": {"type": "string", "description": "What needs to be done"},
+                "priority": {"type": "string", "enum": ["urgent", "high", "normal", "low"], "default": "normal"},
+                "assigned_agent": {"type": "string", "description": "Agent to assign: shams, rumi, leo, wakil, scout, builder"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "update_mission",
+        "description": "Update the status or result of an existing mission. Use this when a mission progresses, gets blocked, or is completed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "mission_id": {"type": "integer", "description": "The mission ID to update"},
+                "status": {"type": "string", "enum": ["inbox", "assigned", "active", "review", "done", "dropped"]},
+                "result": {"type": "string", "description": "Result or outcome when completing a mission"},
+            },
+            "required": ["mission_id"],
+        },
+    },
+    {
+        "name": "propose_action",
+        "description": "Propose an action for Maher to approve before execution. Use this when you want to take an action that affects the real world — archiving emails, creating PRs, sending messages, drafting documents, etc. The action will appear in the dashboard for approval.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action_type": {
+                    "type": "string",
+                    "description": "Type of action",
+                    "enum": ["archive_email", "send_message", "create_pr", "draft_document", "research", "schedule_meeting", "other"]
+                },
+                "title": {"type": "string", "description": "Short title describing the action (e.g. 'Archive 12 promotional emails')"},
+                "description": {"type": "string", "description": "Detailed description of what will happen if approved"},
+                "payload": {
+                    "type": "object",
+                    "description": "Action-specific data (email IDs, code diff, message content, etc.)"
+                }
+            },
+            "required": ["action_type", "title"],
+        },
+    },
+    {
+        "name": "draft_legal_document",
+        "description": "Have Wakil draft a legal document. Creates the document and saves it to Files. Use for LOIs, NDAs, term sheets, legal memos, employment letters, counter-proposals, or any legal document.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_type": {
+                    "type": "string",
+                    "enum": ["loi", "nda", "term_sheet", "legal_memo", "employment_letter", "counter_proposal", "contract", "other"],
+                    "description": "Type of legal document",
+                },
+                "title": {"type": "string", "description": "Document title"},
+                "instructions": {"type": "string", "description": "What the document should cover — parties, terms, key provisions, context"},
+                "context": {"type": "string", "description": "Relevant background (deal details, prior negotiations, etc.)"},
+            },
+            "required": ["document_type", "title", "instructions"],
+        },
+    },
+    {
+        "name": "assign_research",
+        "description": "Assign a research task to Scout. Scout will search the web, compile findings, and report back. Creates a mission assigned to Scout.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What to research"},
+                "depth": {"type": "string", "enum": ["quick", "deep"], "default": "quick",
+                          "description": "Quick = surface-level search, Deep = multiple queries and source analysis"},
+                "deadline": {"type": "string", "description": "When results are needed (e.g. 'today', 'this week')"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "propose_code_change",
+        "description": "Propose a code change to one of Maher's repos. Creates a GitHub PR for review after approval. Use this when Builder plans a fix, feature, or refactor.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "repo": {"type": "string", "description": "Which repo", "enum": ["shams", "rumi", "leo"]},
+                "title": {"type": "string", "description": "PR title describing the change"},
+                "description": {"type": "string", "description": "What this change does and why"},
+                "files": {
+                    "type": "array",
+                    "description": "Files to create or update",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "File path in the repo"},
+                            "content": {"type": "string", "description": "Full file content"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            "required": ["repo", "title", "files"],
+        },
+    },
+    {
         "name": "remember",
         "description": "Save a piece of information to persistent memory. Use this when Maher tells you something important to remember, or when you learn something that should persist across conversations.",
         "input_schema": {
@@ -394,6 +499,140 @@ def _execute_tool(name: str, input_data: dict) -> str:
             result = leo_client.get_trends()
             return json.dumps(result, indent=2, default=str) if result else "Leo unavailable."
 
+        elif name == "create_mission":
+            mission_id = memory.create_mission(
+                title=input_data["title"],
+                description=input_data.get("description", ""),
+                priority=input_data.get("priority", "normal"),
+                assigned_agent=input_data.get("assigned_agent"),
+                tags=[],
+            )
+            agent = input_data.get("assigned_agent", "unassigned")
+            memory.log_activity("shams", "mission_created", f"Mission #{mission_id}: {input_data['title']} → {agent}")
+            return f"Mission #{mission_id} created: {input_data['title']} (assigned to {agent})"
+
+        elif name == "update_mission":
+            kwargs = {}
+            if input_data.get("status"):
+                kwargs["status"] = input_data["status"]
+            if input_data.get("result"):
+                kwargs["result"] = input_data["result"]
+            memory.update_mission(input_data["mission_id"], **kwargs)
+            memory.log_activity("shams", "mission_update",
+                f"Mission #{input_data['mission_id']} → {input_data.get('status', 'updated')}")
+            return f"Mission #{input_data['mission_id']} updated."
+
+        elif name == "draft_legal_document":
+            from agents.registry import build_agent_system_prompt
+            doc_type = input_data["document_type"]
+            title = input_data["title"]
+            instructions = input_data["instructions"]
+            context = input_data.get("context", "")
+
+            # Templates to guide Wakil
+            template_hints = {
+                "loi": "Include: parties, target entity, purchase price/structure, due diligence period, exclusivity, earnout terms if applicable, conditions precedent, expiration date. Use professional legal formatting.",
+                "nda": "Include: parties, definition of confidential information, obligations, term, exceptions (public info, prior knowledge), remedies, governing law (NJ).",
+                "term_sheet": "Include: parties, transaction type, valuation/price, structure (equity/RBF/musharaka), key terms, conditions, timeline, exclusivity. Note any Islamic finance considerations.",
+                "legal_memo": "Structure: Issue, Brief Answer, Facts, Analysis, Conclusion, Recommended Action. Be direct and strategic.",
+                "employment_letter": "Include: position, compensation, benefits, start date, at-will status, non-compete if applicable, reporting structure.",
+                "counter_proposal": "Reference the original proposal, identify areas of agreement, present counter-terms with reasoning, deadline for response.",
+                "contract": "Include standard contract elements: parties, recitals, definitions, obligations, representations, indemnification, termination, governing law.",
+                "other": "",
+            }
+
+            draft_prompt = (
+                f"Draft the following legal document:\n\n"
+                f"**Type:** {doc_type}\n"
+                f"**Title:** {title}\n"
+                f"**Instructions:** {instructions}\n"
+            )
+            if context:
+                draft_prompt += f"\n**Context:** {context}\n"
+            hint = template_hints.get(doc_type, "")
+            if hint:
+                draft_prompt += f"\n**Template guidance:** {hint}\n"
+            draft_prompt += "\nOutput the full document text, ready for review. Use professional legal formatting."
+
+            wakil_system = build_agent_system_prompt("wakil")
+            draft_response = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=4096,
+                system=wakil_system,
+                messages=[{"role": "user", "content": draft_prompt}],
+            )
+            draft_text = draft_response.content[0].text
+
+            # Save to files table
+            filename = f"{doc_type}_{title.lower().replace(' ', '_')[:40]}.md"
+            file_id = memory.save_file(
+                filename=filename,
+                file_type="legal_draft",
+                mime_type="text/markdown",
+                file_size=len(draft_text),
+                summary=f"[{doc_type.upper()}] {title}",
+                transcript=draft_text,
+            )
+            memory.log_activity("wakil", "document_drafted",
+                f"Legal draft: {title} (file #{file_id})",
+                {"document_type": doc_type, "file_id": file_id})
+
+            return f"Document drafted and saved as file #{file_id}: {title}\n\nPreview:\n{draft_text[:500]}..."
+
+        elif name == "assign_research":
+            depth = input_data.get("depth", "quick")
+            deadline = input_data.get("deadline", "")
+            description = f"Research query: {input_data['query']}\nDepth: {depth}"
+            if deadline:
+                description += f"\nDeadline: {deadline}"
+            mission_id = memory.create_mission(
+                title=f"Research: {input_data['query'][:100]}",
+                description=description,
+                priority="high" if depth == "deep" else "normal",
+                assigned_agent="scout",
+            )
+            memory.log_activity("scout", "mission_created",
+                f"Mission #{mission_id}: Research assigned — {input_data['query'][:80]}")
+            return f"Research mission #{mission_id} assigned to Scout: {input_data['query']}"
+
+        elif name == "propose_code_change":
+            action_id = memory.create_action(
+                agent_name="builder",
+                action_type="create_pr",
+                title=f"PR: {input_data['title']}",
+                description=input_data.get("description", ""),
+                payload={
+                    "repo": input_data["repo"],
+                    "title": input_data["title"],
+                    "description": input_data.get("description", ""),
+                    "files": input_data["files"],
+                },
+            )
+            memory.log_activity("builder", "action_proposed",
+                f"Action #{action_id}: PR proposed for {input_data['repo']} — {input_data['title']}")
+            file_list = ", ".join(f["path"] for f in input_data["files"])
+            return (f"Code change #{action_id} proposed: {input_data['title']}\n"
+                    f"Files: {file_list}\n"
+                    f"Waiting for Maher's approval in the dashboard.")
+
+        elif name == "propose_action":
+            action_id = memory.create_action(
+                agent_name="shams",
+                action_type=input_data["action_type"],
+                title=input_data["title"],
+                description=input_data.get("description", ""),
+                payload=input_data.get("payload"),
+            )
+            memory.increment_trust("shams", "total_proposed")
+            # Check auto-approve
+            if memory.should_auto_approve("shams"):
+                memory.update_action_status(action_id, "approved")
+                memory.increment_trust("shams", "total_approved")
+                memory.log_activity("shams", "action_auto_approved", f"Action #{action_id} auto-approved: {input_data['title']}")
+                return f"Action #{action_id} auto-approved: {input_data['title']}"
+            memory.log_activity("shams", "action_proposed", f"Action #{action_id}: {input_data['title']}")
+            return f"Action #{action_id} proposed: {input_data['title']}. Waiting for Maher's approval in the dashboard."
+
         elif name == "remember":
             memory.remember(input_data["key"], input_data["value"])
             return f"Remembered: {input_data['key']}"
@@ -524,6 +763,14 @@ def chat(user_message: str, images: list = None) -> str:
             elif block.type == "tool_use":
                 logger.info(f"Tool call: {block.name}({json.dumps(block.input)[:100]})")
                 result = _execute_tool(block.name, block.input)
+                # Log tool call to activity feed
+                _input_summary = json.dumps(block.input)[:120]
+                _result_summary = (result or "")[:200]
+                memory.log_activity(
+                    "shams", "tool_call",
+                    f"{block.name}: {_input_summary}",
+                    {"tool": block.name, "input": block.input, "result_preview": _result_summary},
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,
@@ -563,6 +810,11 @@ def generate_briefing(briefing_type: str, context: str) -> str:
             if block.type == "tool_use":
                 logger.info(f"Briefing tool call: {block.name}")
                 result = _execute_tool(block.name, block.input)
+                memory.log_activity(
+                    "shams", "tool_call",
+                    f"[briefing] {block.name}: {json.dumps(block.input)[:120]}",
+                    {"tool": block.name, "context": "briefing"},
+                )
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": block.id,

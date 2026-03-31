@@ -33,6 +33,41 @@ GROUP_INSTRUCTION = (
     "Don't repeat what other agents will cover. Be direct, no preamble."
 )
 
+# Tools available to Scout in group chat
+SCOUT_TOOLS = [
+    {
+        "name": "web_search",
+        "description": "Search the internet for current information.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "fetch_url",
+        "description": "Fetch and read a web page.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
+    },
+]
+
+
+def _execute_scout_tool(name: str, input_data: dict) -> str:
+    """Execute a tool for Scout in group chat."""
+    import json as _json
+    if name == "web_search":
+        import web_search
+        results = web_search.search_web(input_data["query"])
+        return _json.dumps(results, indent=2) if results else "No results found."
+    elif name == "fetch_url":
+        import web_search
+        return web_search.fetch_url(input_data["url"])
+    return f"Unknown tool: {name}"
+
 
 def _shams_context() -> str:
     parts = []
@@ -125,13 +160,41 @@ def _get_agent_response(agent_name: str, user_message: str, history: list) -> st
 
     try:
         agent = AGENT_DEFS.get(agent_name, {})
-        response = client.messages.create(
-            model=agent.get("model", "claude-sonnet-4-20250514"),
-            max_tokens=600,
-            system=system,
-            messages=deduped,
-        )
-        text = response.content[0].text.strip()
+        kwargs = {
+            "model": agent.get("model", "claude-sonnet-4-20250514"),
+            "max_tokens": 600,
+            "system": system,
+            "messages": deduped,
+        }
+
+        # Scout gets web search tools
+        if agent_name == "scout":
+            kwargs["tools"] = SCOUT_TOOLS
+            kwargs["max_tokens"] = 1200  # more room for tool use
+
+        response = client.messages.create(**kwargs)
+
+        # Handle tool use loop for Scout (max 3 iterations)
+        if agent_name == "scout":
+            for _ in range(3):
+                if response.stop_reason != "tool_use":
+                    break
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = _execute_scout_tool(block.name, block.input)
+                        memory.log_activity("scout", "tool_call", f"[war room] {block.name}: {block.input.get('query', block.input.get('url', ''))[:80]}")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result[:3000],
+                        })
+                deduped.append({"role": "assistant", "content": response.content})
+                deduped.append({"role": "user", "content": tool_results})
+                response = client.messages.create(**{**kwargs, "messages": deduped})
+
+        text_parts = [b.text for b in response.content if b.type == "text"]
+        text = "\n".join(text_parts).strip()
         if text in ("—", "-", "N/A", ""):
             return None
         return text

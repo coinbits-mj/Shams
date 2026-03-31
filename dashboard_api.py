@@ -473,6 +473,8 @@ def integration_status():
     else:
         statuses["leo"] = "unconfigured"
 
+    statuses["github"] = "connected" if config.GITHUB_TOKEN else "unconfigured"
+
     return jsonify(statuses)
 
 
@@ -555,6 +557,87 @@ def get_agents():
     return jsonify(result)
 
 
+@api.route("/agents/<name>", methods=["GET"])
+@require_auth
+def get_agent_detail(name):
+    """Get full agent detail: info, trust, missions, recent actions, activity."""
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Agent info
+        cur.execute("SELECT * FROM shams_agents WHERE name = %s", (name,))
+        agent = cur.fetchone()
+        if not agent:
+            return jsonify({"error": "not found"}), 404
+
+        # Trust score
+        cur.execute("SELECT * FROM shams_trust_scores WHERE agent_name = %s", (name,))
+        trust = cur.fetchone()
+
+        # Missions
+        cur.execute(
+            "SELECT id, title, status, priority, created_at, updated_at FROM shams_missions "
+            "WHERE assigned_agent = %s ORDER BY created_at DESC LIMIT 20", (name,)
+        )
+        missions = cur.fetchall()
+
+        # Recent actions
+        cur.execute(
+            "SELECT id, action_type, title, status, created_at FROM shams_actions "
+            "WHERE agent_name = %s ORDER BY created_at DESC LIMIT 20", (name,)
+        )
+        actions = cur.fetchall()
+
+        # Recent activity
+        cur.execute(
+            "SELECT event_type, content, timestamp FROM shams_activity_feed "
+            "WHERE agent_name = %s ORDER BY timestamp DESC LIMIT 30", (name,)
+        )
+        activity = cur.fetchall()
+
+    d = dict(agent)
+    for k in ("last_heartbeat", "created_at"):
+        if d.get(k):
+            d[k] = d[k].isoformat()
+    if d.get("config") and isinstance(d["config"], str):
+        d["config"] = json.loads(d["config"])
+
+    if trust:
+        td = dict(trust)
+        if td.get("updated_at"):
+            td["updated_at"] = td["updated_at"].isoformat()
+        total = td.get("total_approved", 0) + td.get("total_rejected", 0)
+        td["approval_rate"] = round(td["total_approved"] / total * 100, 1) if total > 0 else 0
+        d["trust"] = td
+    else:
+        d["trust"] = None
+
+    d["missions"] = []
+    for m in missions:
+        md = dict(m)
+        for k in ("created_at", "updated_at"):
+            if md.get(k):
+                md[k] = md[k].isoformat()
+        d["missions"].append(md)
+
+    d["actions"] = []
+    for a in actions:
+        ad = dict(a)
+        if ad.get("created_at"):
+            ad["created_at"] = ad["created_at"].isoformat()
+        d["actions"].append(ad)
+
+    d["activity"] = []
+    for f in activity:
+        fd = dict(f)
+        if fd.get("timestamp"):
+            fd["timestamp"] = fd["timestamp"].isoformat()
+        d["activity"].append(fd)
+
+    return jsonify(d)
+
+
 @api.route("/agents/<name>/status", methods=["PATCH"])
 @require_auth
 def update_agent_status(name):
@@ -597,6 +680,55 @@ def create_mission():
     return jsonify({"id": mission_id})
 
 
+@api.route("/missions/<int:mission_id>", methods=["GET"])
+@require_auth
+def get_mission(mission_id):
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM shams_missions WHERE id = %s", (mission_id,))
+        mission = cur.fetchone()
+        if not mission:
+            return jsonify({"error": "not found"}), 404
+
+        # Get related actions
+        cur.execute("SELECT * FROM shams_actions WHERE mission_id = %s ORDER BY created_at", (mission_id,))
+        actions = cur.fetchall()
+
+        # Get related activity feed entries (matching mission ID in content)
+        cur.execute(
+            "SELECT * FROM shams_activity_feed WHERE content LIKE %s ORDER BY timestamp",
+            (f"%Mission #{mission_id}%",)
+        )
+        activity = cur.fetchall()
+
+    d = dict(mission)
+    for k in ("created_at", "updated_at"):
+        if d.get(k):
+            d[k] = d[k].isoformat()
+
+    d["actions"] = []
+    for a in actions:
+        ad = dict(a)
+        for k in ("created_at", "resolved_at"):
+            if ad.get(k):
+                ad[k] = ad[k].isoformat()
+        if ad.get("payload") and isinstance(ad["payload"], str):
+            ad["payload"] = json.loads(ad["payload"])
+        d["actions"].append(ad)
+
+    d["activity"] = []
+    for f in activity:
+        fd = dict(f)
+        if fd.get("timestamp"):
+            fd["timestamp"] = fd["timestamp"].isoformat()
+        if fd.get("metadata") and isinstance(fd["metadata"], str):
+            fd["metadata"] = json.loads(fd["metadata"])
+        d["activity"].append(fd)
+
+    return jsonify(d)
+
+
 @api.route("/missions/<int:mission_id>", methods=["PATCH"])
 @require_auth
 def update_mission(mission_id):
@@ -607,6 +739,314 @@ def update_mission(mission_id):
     return jsonify({"ok": True})
 
 
+# ── Inbox Triage ────────────────────────────────────────────────────────────
+
+@api.route("/inbox/scan", methods=["POST"])
+@require_auth
+def inbox_scan():
+    """Deep scan: pull unread from all accounts, triage with Claude, save results."""
+    import google_client
+    import anthropic
+    from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, GOOGLE_ACCOUNTS
+
+    data = request.get_json(silent=True) or {}
+    max_per_account = data.get("max_per_account", 50)
+
+    # Pull unread from each connected account
+    all_emails = []
+    for account_key in GOOGLE_ACCOUNTS:
+        try:
+            emails = google_client.get_unread_emails_for_account(account_key, max_per_account)
+            all_emails.extend(emails)
+        except Exception as e:
+            logger.error(f"Inbox scan error for {account_key}: {e}")
+
+    if not all_emails:
+        return jsonify({"ok": True, "triaged": 0, "message": "No unread emails found."})
+
+    memory.log_activity("shams", "inbox_scan", f"Scanning {len(all_emails)} unread emails across all accounts")
+
+    # Load inbox persona
+    import pathlib
+    persona_path = pathlib.Path(__file__).parent / "context" / "inbox_persona.md"
+    inbox_persona = persona_path.read_text() if persona_path.exists() else "Triage emails by priority."
+
+    # Triage in batches of 20
+    triaged = 0
+    client_api = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    for i in range(0, len(all_emails), 20):
+        batch = all_emails[i:i + 20]
+        email_text = "\n\n---\n\n".join(
+            f"MESSAGE_ID: {e['message_id']}\nACCOUNT: {e['account']}\n"
+            f"From: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
+            for e in batch
+        )
+
+        prompt = (
+            f"Triage these {len(batch)} emails. For EACH email, output a block in this exact format:\n\n"
+            f"MESSAGE_ID: <the message_id from above>\n"
+            f"PRIORITY: P1|P2|P3|P4\n"
+            f"ROUTE: agent1,agent2\n"
+            f"SUMMARY: one-line summary\n"
+            f"ACTION: recommended action\n"
+            f"DRAFT: draft reply (P1/P2 only, or NONE)\n"
+            f"---\n\n"
+            f"Emails:\n\n{email_text}"
+        )
+
+        try:
+            response = client_api.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=4096,
+                system=inbox_persona,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            result_text = response.content[0].text
+
+            # Parse structured blocks
+            email_lookup = {e["message_id"]: e for e in batch}
+            blocks = result_text.split("---")
+            for block in blocks:
+                block = block.strip()
+                if not block:
+                    continue
+                fields = {}
+                for line in block.split("\n"):
+                    if ":" in line:
+                        key, _, val = line.partition(":")
+                        fields[key.strip().upper()] = val.strip()
+
+                msg_id = fields.get("MESSAGE_ID", "")
+                email = email_lookup.get(msg_id)
+                if not email and batch:
+                    # Try to match by position if MESSAGE_ID parsing failed
+                    continue
+
+                priority = fields.get("PRIORITY", "P4")
+                if priority not in ("P1", "P2", "P3", "P4"):
+                    priority = "P4"
+                route_str = fields.get("ROUTE", "shams")
+                routed_to = [r.strip() for r in route_str.split(",") if r.strip()]
+                action = fields.get("ACTION", "")
+                draft = fields.get("DRAFT", "")
+                if draft.upper() == "NONE":
+                    draft = ""
+
+                if email:
+                    memory.save_triage_result(
+                        account=email["account"],
+                        message_id=msg_id,
+                        from_addr=email["from"],
+                        subject=email["subject"],
+                        snippet=email["snippet"],
+                        priority=priority,
+                        routed_to=routed_to,
+                        action=action,
+                        draft_reply=draft,
+                    )
+                    triaged += 1
+
+        except Exception as e:
+            logger.error(f"Triage batch error: {e}")
+
+    memory.log_activity("shams", "inbox_scan", f"Triaged {triaged} emails")
+    return jsonify({"ok": True, "triaged": triaged, "total_unread": len(all_emails)})
+
+
+@api.route("/inbox", methods=["GET"])
+@require_auth
+def get_inbox():
+    priority = request.args.get("priority")
+    account = request.args.get("account")
+    archived_param = request.args.get("archived")
+    archived = None
+    if archived_param == "true":
+        archived = True
+    elif archived_param == "false":
+        archived = False
+    limit = request.args.get("limit", 100, type=int)
+    emails = memory.get_triaged_emails(priority, account, archived, limit)
+    result = []
+    for e in emails:
+        d = dict(e)
+        if d.get("triaged_at"):
+            d["triaged_at"] = d["triaged_at"].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/inbox/<int:triage_id>/archive", methods=["POST"])
+@require_auth
+def archive_email(triage_id):
+    memory.mark_email_archived(triage_id)
+    return jsonify({"ok": True})
+
+
+@api.route("/inbox/batch-archive", methods=["POST"])
+@require_auth
+def batch_archive():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids", [])
+    count = memory.batch_archive_emails(ids)
+    memory.log_activity("shams", "inbox_archive", f"Archived {count} emails")
+    return jsonify({"ok": True, "archived": count})
+
+
+# ── Actions ─────────────────────────────────────────────────────────────────
+
+@api.route("/actions", methods=["GET"])
+@require_auth
+def get_actions():
+    status = request.args.get("status")
+    agent = request.args.get("agent")
+    limit = request.args.get("limit", 50, type=int)
+    actions = memory.get_actions(status, agent, limit)
+    result = []
+    for a in actions:
+        d = dict(a)
+        for k in ("created_at", "resolved_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        if d.get("payload") and isinstance(d["payload"], str):
+            d["payload"] = json.loads(d["payload"])
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/actions/<int:action_id>", methods=["GET"])
+@require_auth
+def get_action(action_id):
+    a = memory.get_action(action_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+    d = dict(a)
+    for k in ("created_at", "resolved_at"):
+        if d.get(k):
+            d[k] = d[k].isoformat()
+    if d.get("payload") and isinstance(d["payload"], str):
+        d["payload"] = json.loads(d["payload"])
+    return jsonify(d)
+
+
+@api.route("/actions/<int:action_id>/approve", methods=["POST"])
+@require_auth
+def approve_action(action_id):
+    a = memory.get_action(action_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+    if a["status"] != "pending":
+        return jsonify({"error": f"Action is already {a['status']}"}), 400
+    memory.update_action_status(action_id, "approved")
+    memory.increment_trust(a["agent_name"], "total_approved")
+    memory.log_activity(a["agent_name"], "action_approved", f"Action #{action_id} approved: {a['title']}")
+    return jsonify({"ok": True})
+
+
+@api.route("/actions/<int:action_id>/reject", methods=["POST"])
+@require_auth
+def reject_action(action_id):
+    data = request.get_json(silent=True) or {}
+    a = memory.get_action(action_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+    if a["status"] != "pending":
+        return jsonify({"error": f"Action is already {a['status']}"}), 400
+    memory.update_action_status(action_id, "rejected", data.get("reason", ""))
+    memory.increment_trust(a["agent_name"], "total_rejected")
+    memory.log_activity(a["agent_name"], "action_rejected", f"Action #{action_id} rejected: {a['title']}")
+    return jsonify({"ok": True})
+
+
+@api.route("/actions/<int:action_id>/execute", methods=["POST"])
+@require_auth
+def execute_action(action_id):
+    """Execute an approved action."""
+    a = memory.get_action(action_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+    if a["status"] != "approved":
+        return jsonify({"error": f"Action must be approved first (currently {a['status']})"}), 400
+
+    memory.update_action_status(action_id, "executing")
+    payload = a["payload"] if isinstance(a["payload"], dict) else json.loads(a["payload"] or "{}")
+
+    try:
+        if a["action_type"] == "create_pr":
+            import github_client
+            import re
+            # Generate a branch name from the title
+            branch = "shams/" + re.sub(r'[^a-z0-9]+', '-', payload.get("title", "change").lower())[:50].strip('-')
+            pr = github_client.create_pr_with_files(
+                repo_key=payload["repo"],
+                branch_name=branch,
+                title=payload["title"],
+                description=payload.get("description", ""),
+                files=payload.get("files", []),
+            )
+            result = f"PR #{pr['number']} created: {pr['url']}"
+            memory.update_action_status(action_id, "completed", result)
+            memory.log_activity("builder", "action_completed", f"Action #{action_id}: {result}")
+            return jsonify({"ok": True, "result": result, "pr": pr})
+        else:
+            # Generic actions — mark completed, no auto-execution
+            memory.update_action_status(action_id, "completed", "Executed manually")
+            memory.log_activity(a["agent_name"], "action_completed", f"Action #{action_id} executed")
+            return jsonify({"ok": True, "result": "Action marked as executed"})
+
+    except Exception as e:
+        error_msg = str(e)
+        memory.update_action_status(action_id, "failed", error_msg)
+        memory.log_activity(a["agent_name"], "error", f"Action #{action_id} failed: {error_msg}")
+        logger.error(f"Action execution error: {e}", exc_info=True)
+        return jsonify({"error": error_msg}), 500
+
+
+@api.route("/actions/batch-approve", methods=["POST"])
+@require_auth
+def batch_approve_actions():
+    data = request.get_json(silent=True) or {}
+    action_ids = data.get("ids", [])
+    approved = 0
+    for aid in action_ids:
+        a = memory.get_action(aid)
+        if a and a["status"] == "pending":
+            memory.update_action_status(aid, "approved")
+            memory.log_activity(a["agent_name"], "action_approved", f"Action #{aid} approved: {a['title']}")
+            approved += 1
+    return jsonify({"ok": True, "approved": approved})
+
+
+# ── Trust Scores ────────────────────────────────────────────────────────────
+
+@api.route("/trust", methods=["GET"])
+@require_auth
+def get_trust():
+    scores = memory.get_all_trust_scores()
+    result = []
+    for s in scores:
+        d = dict(s)
+        if d.get("updated_at"):
+            d["updated_at"] = d["updated_at"].isoformat()
+        # Calculate approval rate
+        total = d.get("total_approved", 0) + d.get("total_rejected", 0)
+        d["approval_rate"] = round(d["total_approved"] / total * 100, 1) if total > 0 else 0
+        d["eligible_for_auto"] = d["total_proposed"] >= 10 and d["approval_rate"] >= 90
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/trust/<agent_name>/auto-approve", methods=["POST"])
+@require_auth
+def toggle_auto_approve(agent_name):
+    data = request.get_json(silent=True) or {}
+    enabled = data.get("enabled", False)
+    memory.set_auto_approve(agent_name, enabled)
+    memory.log_activity("shams", "trust_update",
+        f"Auto-approve {'enabled' if enabled else 'disabled'} for {agent_name}")
+    return jsonify({"ok": True})
+
+
 # ── Activity Feed ────────────────────────────────────────────────────────────
 
 @api.route("/feed", methods=["GET"])
@@ -614,7 +1054,8 @@ def update_mission(mission_id):
 def get_feed():
     limit = request.args.get("limit", 50, type=int)
     agent = request.args.get("agent")
-    feed = memory.get_activity_feed(limit, agent)
+    event_type = request.args.get("event_type")
+    feed = memory.get_activity_feed(limit, agent, event_type)
     result = []
     for f in feed:
         d = dict(f)

@@ -35,4 +35,5 @@ async function api(path, opts = {}) {
 
 export const get = (path) => api(path);
 export const post = (path, data) => api(path, { method: 'POST', body: JSON.stringify(data) });
+export const patch = (path, data) => api(path, { method: 'PATCH', body: JSON.stringify(data) });
 export const del = (path) => api(path, { method: 'DELETE' });
