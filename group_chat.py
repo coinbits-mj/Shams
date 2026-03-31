@@ -80,6 +80,27 @@ def _shams_context() -> str:
     cash = mercury_client.get_balances()
     if cash:
         parts.append(f"Cash position: ${cash.get('grand_total', 0):,.0f}")
+    # Recent triaged emails
+    try:
+        emails = memory.get_triaged_emails(archived=False, limit=20)
+        if emails:
+            by_priority = {}
+            for e in emails:
+                p = e.get("priority", "P4")
+                if p not in by_priority:
+                    by_priority[p] = []
+                by_priority[p].append(e)
+            inbox_lines = ["Recent inbox:"]
+            for p in ["P1", "P2", "P3", "P4"]:
+                group = by_priority.get(p, [])
+                if group:
+                    inbox_lines.append(f"  {p} ({len(group)}):")
+                    for e in group[:5]:
+                        routed = ",".join(e.get("routed_to") or [])
+                        inbox_lines.append(f"    - [{e.get('account')}] {e.get('subject','')} (from: {e.get('from_addr','')}) → {routed} | {e.get('action','')}")
+            parts.append("\n".join(inbox_lines))
+    except Exception:
+        pass
     return "\n".join(parts)
 
 
@@ -90,6 +111,15 @@ def _rumi_context() -> str:
         parts.append(f"Yesterday P&L: revenue ${pl.get('revenue', 0):,.0f}, "
                       f"net margin {pl.get('net_margin_pct', 0):.1f}%, "
                       f"food cost {pl.get('food_cost_pct', 0):.1f}%")
+    try:
+        emails = memory.get_triaged_emails(archived=False, limit=50)
+        rumi_emails = [e for e in emails if "rumi" in (e.get("routed_to") or [])]
+        if rumi_emails:
+            parts.append(f"Emails routed to you ({len(rumi_emails)}):")
+            for e in rumi_emails[:5]:
+                parts.append(f"  [{e.get('priority')}] {e.get('subject','')} — {e.get('action','')}")
+    except Exception:
+        pass
     return "\n".join(parts) if parts else "Rumi data unavailable."
 
 
@@ -113,10 +143,15 @@ def _leo_context() -> str:
 
 def _wakil_context() -> str:
     parts = ["Active case: PCT v. Coinbits (Bankr. D. Del.). Strategy: motion to dismiss, then settle from strength."]
-    # Check if there are any triaged legal emails in memory
-    legal_emails = memory.recall("inbox_legal_queue")
-    if legal_emails:
-        parts.append(f"Pending legal emails: {legal_emails}")
+    try:
+        emails = memory.get_triaged_emails(archived=False, limit=50)
+        wakil_emails = [e for e in emails if "wakil" in (e.get("routed_to") or [])]
+        if wakil_emails:
+            parts.append(f"Emails routed to you ({len(wakil_emails)}):")
+            for e in wakil_emails[:8]:
+                parts.append(f"  [{e.get('priority')}] {e.get('subject','')} from {e.get('from_addr','')} — {e.get('action','')}")
+    except Exception:
+        pass
     return "\n".join(parts)
 
 
