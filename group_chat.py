@@ -77,7 +77,12 @@ def _leo_context() -> str:
 
 
 def _wakil_context() -> str:
-    return "Active case: PCT v. Coinbits (Bankr. D. Del.). Strategy: motion to dismiss, then settle from strength."
+    parts = ["Active case: PCT v. Coinbits (Bankr. D. Del.). Strategy: motion to dismiss, then settle from strength."]
+    # Check if there are any triaged legal emails in memory
+    legal_emails = memory.recall("inbox_legal_queue")
+    if legal_emails:
+        parts.append(f"Pending legal emails: {legal_emails}")
+    return "\n".join(parts)
 
 
 def _get_agent_response(agent_name: str, user_message: str, history: list) -> str | None:

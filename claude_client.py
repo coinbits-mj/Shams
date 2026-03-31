@@ -342,21 +342,29 @@ def _execute_tool(name: str, input_data: dict) -> str:
             emails = google_client.get_unread_emails(max_emails)
             if not emails:
                 return "No unread emails (or Gmail not connected — check Integrations page)."
-            # Load the inbox triage persona for context
             inbox_persona = _load_context_file("inbox_persona.md")
-            # Format emails for triage
             email_text = "\n\n".join(
                 f"From: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
                 for e in emails
             )
-            # Use a sub-call to Claude with the inbox persona
             triage_response = client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=2048,
                 system=inbox_persona if inbox_persona else "Triage these emails by priority.",
                 messages=[{"role": "user", "content": f"Triage these {len(emails)} emails:\n\n{email_text}"}],
             )
-            return triage_response.content[0].text
+            result = triage_response.content[0].text
+
+            # Route triaged emails to agent queues in memory
+            # Extract P1/P2 emails routed to specific agents
+            for agent in ["wakil", "rumi", "leo", "scout"]:
+                if agent in result.lower():
+                    # Save the relevant portion so agents can access their queue
+                    lines = [l for l in result.split("\n") if agent in l.lower()]
+                    if lines:
+                        memory.remember(f"inbox_{agent}_queue", "\n".join(lines[:5]))
+
+            return result
 
         elif name == "read_codebase":
             from agents.codebase import read_file
