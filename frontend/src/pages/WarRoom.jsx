@@ -1,12 +1,15 @@
 import { useState, useRef, useEffect } from 'react';
 import { post, get } from '../api';
-import { Send, Sun, Activity, Heart } from 'lucide-react';
+import { Send, Sun, Activity, Heart, Scale, Search, Wrench } from 'lucide-react';
 
 const agentConfig = {
   maher: { color: '#e2e8f0', icon: null, label: 'Maher' },
   shams: { color: '#f59e0b', icon: Sun, label: 'Shams' },
   rumi: { color: '#06b6d4', icon: Activity, label: 'Rumi' },
   leo: { color: '#22c55e', icon: Heart, label: 'Leo' },
+  wakil: { color: '#a855f7', icon: Scale, label: 'Wakil' },
+  scout: { color: '#ef4444', icon: Search, label: 'Scout' },
+  builder: { color: '#3b82f6', icon: Wrench, label: 'Builder' },
 };
 
 export default function WarRoom() {
@@ -54,7 +57,7 @@ export default function WarRoom() {
           <h2 className="mono-heading text-lg">war room</h2>
         </div>
         <div className="flex items-center gap-4">
-          {['shams', 'rumi', 'leo'].map(name => {
+          {['shams', 'rumi', 'leo', 'wakil', 'scout'].map(name => {
             const cfg = agentConfig[name];
             const Icon = cfg.icon;
             return (
