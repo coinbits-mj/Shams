@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
-import { post, get } from '../api';
-import { Send, Sun, Activity, Heart, Scale, Search, Wrench } from 'lucide-react';
+import { post, get, upload } from '../api';
+import { Send, Sun, Activity, Heart, Scale, Search, Wrench, Paperclip, X, FileText, Image } from 'lucide-react';
 
 const agentConfig = {
   maher: { color: '#e2e8f0', icon: null, label: 'Maher' },
@@ -15,8 +15,10 @@ const agentConfig = {
 export default function WarRoom() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     get('/group-chat/history?limit=50').then(d => d && setMessages(d));
@@ -26,17 +28,36 @@ export default function WarRoom() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  function handleFiles(e) {
+    const selected = Array.from(e.target.files);
+    setFiles(prev => [...prev, ...selected]);
+    e.target.value = '';
+  }
+
+  function removeFile(idx) {
+    setFiles(prev => prev.filter((_, i) => i !== idx));
+  }
+
   async function handleSend(e) {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if ((!input.trim() && files.length === 0) || loading) return;
     const msg = input.trim();
+    const attachedFiles = [...files];
     setInput('');
+    setFiles([]);
 
-    // Add user message immediately
-    setMessages(prev => [...prev, { agent_name: 'maher', content: msg, timestamp: new Date().toISOString() }]);
+    const label = attachedFiles.length > 0
+      ? `${msg || ''}${msg ? ' ' : ''}[${attachedFiles.map(f => f.name).join(', ')}]`
+      : msg;
+    setMessages(prev => [...prev, { agent_name: 'maher', content: label, timestamp: new Date().toISOString() }]);
     setLoading(true);
 
-    const data = await post('/group-chat', { message: msg });
+    let data;
+    if (attachedFiles.length > 0) {
+      data = await upload('/group-chat', msg, attachedFiles);
+    } else {
+      data = await post('/group-chat', { message: msg });
+    }
     if (data?.responses) {
       const newMsgs = data.responses.map(r => ({
         agent_name: r.agent,
@@ -48,8 +69,14 @@ export default function WarRoom() {
     setLoading(false);
   }
 
+  function handleDrop(e) {
+    e.preventDefault();
+    const dropped = Array.from(e.dataTransfer.files);
+    if (dropped.length) setFiles(prev => [...prev, ...dropped]);
+  }
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" onDragOver={e => e.preventDefault()} onDrop={handleDrop}>
       {/* Header */}
       <div className="border-b border-[var(--border)] px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -133,8 +160,28 @@ export default function WarRoom() {
         <div ref={bottomRef} />
       </div>
 
+      {/* File preview */}
+      {files.length > 0 && (
+        <div className="px-6 py-2 border-t border-[var(--border)] flex gap-2 flex-wrap">
+          {files.map((f, i) => (
+            <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] text-xs text-[var(--text-secondary)]">
+              {f.type?.startsWith('image/') ? <Image size={12} /> : <FileText size={12} />}
+              <span className="max-w-[120px] truncate">{f.name}</span>
+              <button onClick={() => removeFile(i)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <form onSubmit={handleSend} className="border-t border-[var(--border)] px-6 py-4 flex gap-3">
+        <input type="file" ref={fileRef} onChange={handleFiles} multiple accept="image/*,.pdf,.doc,.docx,.txt,.md,.csv,.json" className="hidden" />
+        <button type="button" onClick={() => fileRef.current?.click()}
+          className="px-3 py-3 text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+          <Paperclip size={16} />
+        </button>
         <input type="text" value={input} onChange={e => setInput(e.target.value)}
           placeholder="message the squad..."
           className="flex-1 px-4 py-3 bg-[var(--bg-card)] border border-[var(--border)] rounded-xl text-[var(--text-primary)] placeholder-[var(--text-muted)] focus:outline-none focus:border-[var(--accent)] mono-heading text-sm" />

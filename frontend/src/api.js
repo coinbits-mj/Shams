@@ -37,3 +37,20 @@ export const get = (path) => api(path);
 export const post = (path, data) => api(path, { method: 'POST', body: JSON.stringify(data) });
 export const patch = (path, data) => api(path, { method: 'PATCH', body: JSON.stringify(data) });
 export const del = (path) => api(path, { method: 'DELETE' });
+
+export async function upload(path, message, files) {
+  const form = new FormData();
+  if (message) form.append('message', message);
+  for (const f of files) form.append('files', f);
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${sessionToken}` },
+    body: form,
+  });
+  if (res.status === 401) {
+    clearSession();
+    window.location.href = '/login';
+    return null;
+  }
+  return res.json();
+}

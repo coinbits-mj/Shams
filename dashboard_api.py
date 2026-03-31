@@ -125,14 +125,63 @@ def logout():
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
+def _process_uploaded_files(req) -> tuple:
+    """Extract message and file data from a multipart or JSON request.
+    Returns (message, images_list, doc_text).
+    """
+    import base64
+
+    images = []
+    doc_text = ""
+
+    # Multipart form
+    if req.content_type and "multipart" in req.content_type:
+        message = req.form.get("message", "").strip()
+        files = req.files.getlist("files")
+        for f in files:
+            file_bytes = f.read()
+            mime = f.content_type or ""
+            fname = f.filename or "upload"
+
+            if mime.startswith("image/"):
+                img_b64 = base64.b64encode(file_bytes).decode("utf-8")
+                images.append({"data": img_b64, "media_type": mime})
+                # Save to files table
+                memory.save_file(fname, "photo", mime, len(file_bytes),
+                                 summary=f"Uploaded via dashboard: {fname}")
+            elif mime == "application/pdf":
+                from app import extract_document_text
+                text = extract_document_text(file_bytes, fname)
+                doc_text += f"\n\n[Document: {fname}]\n{text}"
+                memory.save_file(fname, "pdf", mime, len(file_bytes),
+                                 transcript=text[:2000],
+                                 summary=f"Uploaded via dashboard: {fname}")
+            else:
+                # Try text extraction for other docs
+                from app import extract_document_text
+                text = extract_document_text(file_bytes, fname)
+                doc_text += f"\n\n[Document: {fname}]\n{text}"
+                memory.save_file(fname, "document", mime, len(file_bytes),
+                                 transcript=text[:2000],
+                                 summary=f"Uploaded via dashboard: {fname}")
+    else:
+        data = req.get_json(silent=True) or {}
+        message = data.get("message", "").strip()
+
+    return message, images, doc_text
+
+
 @api.route("/chat", methods=["POST"])
 @require_auth
 def chat():
-    data = request.get_json(silent=True) or {}
-    message = data.get("message", "").strip()
-    if not message:
-        return jsonify({"error": "message required"}), 400
-    reply = claude_client.chat(message)
+    message, images, doc_text = _process_uploaded_files(request)
+
+    if doc_text:
+        message = (message + doc_text) if message else doc_text.strip()
+    if not message and not images:
+        return jsonify({"error": "message or file required"}), 400
+
+    reply = claude_client.chat(message or "What's in this file?", images=images if images else None)
     return jsonify({"reply": reply})
 
 
@@ -141,10 +190,14 @@ def chat():
 @api.route("/group-chat", methods=["POST"])
 @require_auth
 def group_chat_send():
-    data = request.get_json(silent=True) or {}
-    message = data.get("message", "").strip()
+    message, images, doc_text = _process_uploaded_files(request)
+
+    if doc_text:
+        message = (message + doc_text) if message else doc_text.strip()
     if not message:
         return jsonify({"error": "message required"}), 400
+
+    # For War Room, prepend file context to the message
     responses = group_chat.send_group_message(message)
     return jsonify({"responses": responses})
 
