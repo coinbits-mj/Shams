@@ -18,6 +18,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")  # MJ's chat ID — bo
 # OpenAI (Whisper for voice transcription)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
+# Leo (health coach API)
+LEO_API_URL = os.environ.get("LEO_API_URL", "")
+LEO_API_SECRET = os.environ.get("LEO_API_SECRET", "")
+LEO_USER_ID = os.environ.get("LEO_USER_ID", "1")
+
 # Rumi (coffee-pl-bot internal API)
 RUMI_BASE_URL = os.environ.get("RUMI_BASE_URL", "http://localhost:8080")
 

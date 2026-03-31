@@ -8,6 +8,7 @@ import memory
 import claude_client
 import rumi_client
 import mercury_client
+import leo_client
 import google_client
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,11 @@ def build_morning_context() -> str:
         parts.append("\n## Action Items")
         for a in actions["items"][:5]:
             parts.append(f"- {a.get('text', a)}")
+
+    # Health from Leo
+    health = leo_client.get_health_brief()
+    if health and health != "Leo: unavailable":
+        parts.append(f"\n{health}")
 
     # Open loops
     loops = memory.get_open_loops()

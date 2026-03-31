@@ -149,6 +149,22 @@ TOOLS = [
         },
     },
     {
+        "name": "get_leo_health_summary",
+        "description": "Get Maher's latest health data from Leo — weight, sleep, HRV, readiness, glucose, calories, steps, streak, today's meals.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "get_leo_trends",
+        "description": "Get Maher's 7-day health trends from Leo — daily weight, sleep, HRV, calories, steps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
         "name": "remember",
         "description": "Save a piece of information to persistent memory. Use this when Maher tells you something important to remember, or when you learn something that should persist across conversations.",
         "input_schema": {
@@ -262,6 +278,16 @@ def _execute_tool(name: str, input_data: dict) -> str:
             import rumi_client
             result = rumi_client.get_inventory_alerts()
             return json.dumps(result, indent=2) if result else "Rumi unavailable."
+
+        elif name == "get_leo_health_summary":
+            import leo_client
+            result = leo_client.get_health_summary()
+            return json.dumps(result, indent=2, default=str) if result else "Leo unavailable."
+
+        elif name == "get_leo_trends":
+            import leo_client
+            result = leo_client.get_trends()
+            return json.dumps(result, indent=2, default=str) if result else "Leo unavailable."
 
         elif name == "remember":
             memory.remember(input_data["key"], input_data["value"])

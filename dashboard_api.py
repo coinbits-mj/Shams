@@ -435,7 +435,15 @@ def integration_status():
     statuses["marginedge"] = "connected" if rumi_ok else "unconfigured"
     statuses["slack"] = "connected" if rumi_ok else "unconfigured"
 
-    statuses["leo"] = "unconfigured"
+    # Leo
+    if config.LEO_API_URL:
+        try:
+            r = req.get(f"{config.LEO_API_URL}/health", timeout=5)
+            statuses["leo"] = "connected" if r.ok else "error"
+        except Exception:
+            statuses["leo"] = "error"
+    else:
+        statuses["leo"] = "unconfigured"
 
     return jsonify(statuses)
 
