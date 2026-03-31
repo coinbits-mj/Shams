@@ -28,9 +28,14 @@ GROUP_AGENTS = {
 }
 
 GROUP_INSTRUCTION = (
-    "\n\nYou are in a group chat with Maher and other agents. Keep responses concise (2-5 sentences). "
-    "Only respond if the question touches your domain. If it's outside your area, respond with just '—'. "
-    "Don't repeat what other agents will cover. Be direct, no preamble."
+    "\n\nYou are in a group chat with Maher and other agents. "
+    "CRITICAL RULES:\n"
+    "1. ONLY respond if Maher directly addresses you by name, OR explicitly asks all agents to weigh in, "
+    "OR the question is squarely in your domain and no other agent covers it.\n"
+    "2. If it's not for you, respond with just '—'. Err on the side of silence.\n"
+    "3. When you do respond, keep it to 1-3 sentences. No preamble, no 'Great question!', just the answer.\n"
+    "4. Never repeat what another agent already said or will say.\n"
+    "5. Don't volunteer unsolicited advice or opinions outside your lane."
 )
 
 # Tools available to Scout in group chat
@@ -80,9 +85,9 @@ def _shams_context() -> str:
     cash = mercury_client.get_balances()
     if cash:
         parts.append(f"Cash position: ${cash.get('grand_total', 0):,.0f}")
-    # Recent triaged emails
+    # All triaged emails (including archived history)
     try:
-        emails = memory.get_triaged_emails(archived=False, limit=20)
+        emails = memory.get_triaged_emails(limit=100)
         if emails:
             by_priority = {}
             for e in emails:
@@ -112,11 +117,11 @@ def _rumi_context() -> str:
                       f"net margin {pl.get('net_margin_pct', 0):.1f}%, "
                       f"food cost {pl.get('food_cost_pct', 0):.1f}%")
     try:
-        emails = memory.get_triaged_emails(archived=False, limit=50)
+        emails = memory.get_triaged_emails(limit=100)
         rumi_emails = [e for e in emails if "rumi" in (e.get("routed_to") or [])]
         if rumi_emails:
             parts.append(f"Emails routed to you ({len(rumi_emails)}):")
-            for e in rumi_emails[:5]:
+            for e in rumi_emails[:8]:
                 parts.append(f"  [{e.get('priority')}] {e.get('subject','')} — {e.get('action','')}")
     except Exception:
         pass
@@ -144,11 +149,11 @@ def _leo_context() -> str:
 def _wakil_context() -> str:
     parts = ["Active case: PCT v. Coinbits (Bankr. D. Del.). Strategy: motion to dismiss, then settle from strength."]
     try:
-        emails = memory.get_triaged_emails(archived=False, limit=50)
+        emails = memory.get_triaged_emails(limit=100)
         wakil_emails = [e for e in emails if "wakil" in (e.get("routed_to") or [])]
         if wakil_emails:
             parts.append(f"Emails routed to you ({len(wakil_emails)}):")
-            for e in wakil_emails[:8]:
+            for e in wakil_emails[:10]:
                 parts.append(f"  [{e.get('priority')}] {e.get('subject','')} from {e.get('from_addr','')} — {e.get('action','')}")
     except Exception:
         pass
