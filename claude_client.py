@@ -176,6 +176,30 @@ TOOLS = [
         },
     },
     {
+        "name": "search_email",
+        "description": "Search Maher's email across all connected accounts (personal, coinbits, qcc). Finds read and unread emails. Use Gmail search syntax: 'from:name', 'subject:topic', 'after:2026/01/01', etc. Use this when Maher asks about specific emails, conversations, or communications.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Gmail search query (e.g. 'from:seward subject:settlement', 'from:richard red house')"},
+                "max_results": {"type": "integer", "description": "Max emails to return (default 10)", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "read_email",
+        "description": "Read the full body of a specific email. Use this after search_email to get the complete text of an important email.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Account key from search results", "enum": ["personal", "coinbits", "qcc"]},
+                "message_id": {"type": "string", "description": "Gmail message ID from search results"},
+            },
+            "required": ["account", "message_id"],
+        },
+    },
+    {
         "name": "read_codebase",
         "description": "Read a file from any of Maher's codebases (shams, rumi, leo). Use this to understand how something works, review code, or help Builder plan changes.",
         "input_schema": {
@@ -472,6 +496,23 @@ def _execute_tool(name: str, input_data: dict) -> str:
                         memory.remember(f"inbox_{agent}_queue", "\n".join(lines[:5]))
 
             return result
+
+        elif name == "search_email":
+            import google_client
+            results = google_client.search_emails(input_data["query"], input_data.get("max_results", 10))
+            if not results:
+                return "No emails found matching that search."
+            output = f"Found {len(results)} email(s):\n\n"
+            for e in results:
+                output += f"Account: {e['account']} ({e['account_email']})\n"
+                output += f"From: {e['from']}\nSubject: {e['subject']}\nDate: {e['date']}\n"
+                output += f"Snippet: {e['snippet']}\nMessage ID: {e['message_id']}\n\n---\n\n"
+            return output
+
+        elif name == "read_email":
+            import google_client
+            body = google_client.get_email_body(input_data["account"], input_data["message_id"])
+            return body
 
         elif name == "read_codebase":
             from agents.codebase import read_file

@@ -114,6 +114,76 @@ def _fetch_emails_for_account(token: str, email_addr: str, account_key: str,
     return emails
 
 
+def search_emails(query: str, max_results: int = 10) -> list[dict]:
+    """Search emails across ALL connected accounts using Gmail search syntax."""
+    all_emails = []
+    for account_key, email_addr in GOOGLE_ACCOUNTS.items():
+        token = _get_access_token(account_key)
+        if not token:
+            continue
+        try:
+            headers = _gmail_headers(token)
+            r = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                             headers=headers, params={"q": query, "maxResults": max_results},
+                             timeout=15)
+            if not r.ok:
+                continue
+            messages = r.json().get("messages", [])
+            for msg in messages:
+                detail = requests.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+                    headers=headers, params={"format": "metadata"}, timeout=15
+                )
+                if not detail.ok:
+                    continue
+                data = detail.json()
+                hdrs = {h["name"]: h["value"] for h in data.get("payload", {}).get("headers", [])}
+                all_emails.append({
+                    "account": account_key,
+                    "account_email": email_addr,
+                    "subject": hdrs.get("Subject", ""),
+                    "from": hdrs.get("From", ""),
+                    "snippet": data.get("snippet", ""),
+                    "date": hdrs.get("Date", ""),
+                    "message_id": msg["id"],
+                })
+        except Exception as e:
+            logger.error(f"Gmail search error for {account_key}: {e}")
+
+    all_emails.sort(key=lambda e: e.get("date", ""), reverse=True)
+    return all_emails[:max_results]
+
+
+def get_email_body(account_key: str, message_id: str) -> str:
+    """Get the full body text of a specific email."""
+    import base64
+    token = _get_access_token(account_key)
+    if not token:
+        return "Account not connected."
+    headers = _gmail_headers(token)
+    r = requests.get(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+        headers=headers, params={"format": "full"}, timeout=15
+    )
+    if not r.ok:
+        return f"Failed to fetch email: {r.status_code}"
+
+    data = r.json()
+    payload = data.get("payload", {})
+
+    def _extract_text(part):
+        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+            return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+        for sub in part.get("parts", []):
+            text = _extract_text(sub)
+            if text:
+                return text
+        return ""
+
+    body = _extract_text(payload)
+    return body[:5000] if body else data.get("snippet", "No body text found.")
+
+
 # ── Google Calendar ──────────────────────────────────────────────────────────
 
 def get_todays_events() -> list[dict]:
