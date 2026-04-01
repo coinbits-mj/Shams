@@ -6,6 +6,7 @@ import json
 import logging
 import pathlib
 import anthropic
+import config
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 import memory
 
@@ -450,7 +451,7 @@ def _execute_tool(name: str, input_data: dict) -> str:
                 return "No unread emails (or Gmail not connected — check Integrations page)."
             inbox_persona = _load_context_file("inbox_persona.md")
             email_text = "\n\n".join(
-                f"From: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
+                f"Account: {e.get('account', 'unknown')} ({e.get('account_email', '')})\nFrom: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
                 for e in emails
             )
             triage_response = client.messages.create(
@@ -706,9 +707,20 @@ def _build_system():
     if mem_context:
         system += f"\n\n# Live State (from memory)\n{mem_context}"
 
+    # Connected accounts
+    import google_client
+    connected = []
+    for acct_key, acct_email in config.GOOGLE_ACCOUNTS.items():
+        token = memory.recall(f"google_{acct_key}_access_token")
+        if token:
+            connected.append(f"{acct_key} ({acct_email})")
+    if connected:
+        system += f"\n\n# Connected Email Accounts\nYou have access to these Gmail accounts: {', '.join(connected)}. "
+        system += "When triaging email or answering questions about email, you pull from ALL connected accounts."
+
     system += "\n\n# Tools Available"
     system += "\nYou have tools to search the web, check Mercury bank balances and transactions, "
-    system += "pull live P&L and operations data from Rumi, and manage persistent memory."
+    system += "pull live P&L and operations data from Rumi, triage email from all connected accounts, and manage persistent memory."
     system += "\n\n# CRITICAL: Proactive Memory & Tracking"
     system += "\nYou MUST use your memory tools automatically — never wait for Maher to ask you to remember something."
     system += "\n- **remember**: Save ANY new fact, preference, update, or context Maher shares. Names, numbers, dates, "
