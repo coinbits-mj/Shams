@@ -32,12 +32,24 @@ GROUP_INSTRUCTION_DEFAULT = (
     "Be direct, no preamble, no filler."
 )
 
-GROUP_INSTRUCTION_TEAM = (
+GROUP_INSTRUCTION_TEAM_LEADER = (
+    "\n\n# WAR ROOM — TEAM MODE (YOU ARE THE LEADER)\n"
+    "Maher asked the whole team. You speak FIRST. Your job:\n"
+    "1. Acknowledge Maher's request\n"
+    "2. Give your take (1-2 sentences)\n"
+    "3. Delegate to specific agents by name — tell them exactly what you need from them\n"
+    "Example: 'Wakil, check if this has legal exposure. Rumi, what did yesterday's numbers look like?'\n"
+    "Keep it tight. The other agents will see your response and act on it."
+)
+
+GROUP_INSTRUCTION_TEAM_MEMBER = (
     "\n\n# WAR ROOM — TEAM MODE\n"
-    "Maher has asked the whole team to weigh in. "
-    "Shams is the team leader and should synthesize and delegate. "
-    "Other agents: contribute ONLY your domain expertise. 1-3 sentences. "
-    "Don't repeat what others will say. Be direct."
+    "Maher asked the whole team. Shams (team leader) has already responded — "
+    "his response is in the conversation. Follow his lead:\n"
+    "- If Shams asked you something specific, answer it. 1-3 sentences.\n"
+    "- If Shams didn't mention you, respond with '—'.\n"
+    "- If you have critical domain insight Shams missed, add it briefly.\n"
+    "- Do NOT acknowledge, agree, or restate. Just deliver your part and stop."
 )
 
 GROUP_INSTRUCTION_SILENT = (
@@ -59,19 +71,19 @@ def _parse_mentions(message: str) -> set:
     return mentioned
 
 
-def _get_instruction(agent_name: str, user_message: str) -> str:
+def _get_instruction(agent_name: str, user_message: str, is_team_round2: bool = False) -> str:
     """Get the right instruction for this agent based on whether they were addressed."""
     mentions = _parse_mentions(user_message)
     if "all" in mentions:
-        return GROUP_INSTRUCTION_TEAM
+        if agent_name == "shams" and not is_team_round2:
+            return GROUP_INSTRUCTION_TEAM_LEADER
+        return GROUP_INSTRUCTION_TEAM_MEMBER
     if mentions and agent_name in mentions:
         return GROUP_INSTRUCTION_DEFAULT
     if not mentions and agent_name == "shams":
-        # Shams always responds by default
         return GROUP_INSTRUCTION_DEFAULT
     if mentions and agent_name not in mentions:
         return GROUP_INSTRUCTION_SILENT
-    # No mentions, not shams → silent
     return GROUP_INSTRUCTION_SILENT
 
 
@@ -197,7 +209,7 @@ def _wakil_context() -> str:
     return "\n".join(parts)
 
 
-def _get_agent_response(agent_name: str, user_message: str, history: list) -> str | None:
+def _get_agent_response(agent_name: str, user_message: str, history: list, is_team_round2: bool = False) -> str | None:
     """Get one agent's response in the group chat."""
     # Build conversation from history
     messages = []
@@ -233,7 +245,7 @@ def _get_agent_response(agent_name: str, user_message: str, history: list) -> st
     except Exception as e:
         context = f"Context error: {e}"
 
-    system = build_agent_system_prompt(agent_name, context) + _get_instruction(agent_name, user_message)
+    system = build_agent_system_prompt(agent_name, context) + _get_instruction(agent_name, user_message, is_team_round2=is_team_round2)
 
     try:
         agent = AGENT_DEFS.get(agent_name, {})
@@ -293,37 +305,63 @@ def send_group_message(user_message: str) -> list[dict]:
     history = memory.get_group_messages(30)
 
     mentions = _parse_mentions(user_message)
+    responses = []
 
     if "all" in mentions:
-        # @group — everyone responds
-        agents_to_call = list(GROUP_AGENTS.keys())
-    elif mentions:
-        # Specific @agent(s) — only those agents + shams (as leader)
-        agents_to_call = list(mentions)
-        if "shams" not in agents_to_call:
-            agents_to_call.insert(0, "shams")
+        # @group — Round 1: Shams responds first as leader
+        shams_reply = _get_agent_response("shams", user_message, history)
+        if shams_reply:
+            memory.save_group_message("shams", shams_reply)
+            memory.log_activity("shams", "group_chat", shams_reply[:100])
+            responses.append({"agent": "shams", "content": shams_reply})
+
+        # Round 2: Other agents respond in parallel, with Shams's response in history
+        history_with_shams = memory.get_group_messages(30)
+        other_agents = [name for name in GROUP_AGENTS if name != "shams"]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(other_agents)) as executor:
+            futures = {
+                executor.submit(_get_agent_response, name, user_message, history_with_shams, is_team_round2=True): name
+                for name in other_agents
+            }
+            for future in concurrent.futures.as_completed(futures):
+                agent_name = futures[future]
+                try:
+                    reply = future.result()
+                    if reply:
+                        memory.save_group_message(agent_name, reply)
+                        memory.log_activity(agent_name, "group_chat", reply[:100])
+                        responses.append({"agent": agent_name, "content": reply})
+                except Exception as e:
+                    logger.error(f"Group chat {agent_name} error: {e}")
+
     else:
-        # No mentions — only Shams responds
-        agents_to_call = ["shams"]
+        if mentions:
+            # Specific @agent(s) — only those agents + shams
+            agents_to_call = list(mentions)
+            if "shams" not in agents_to_call:
+                agents_to_call.insert(0, "shams")
+        else:
+            # No mentions — only Shams
+            agents_to_call = ["shams"]
 
-    responses = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(agents_to_call), 1)) as executor:
-        futures = {
-            executor.submit(_get_agent_response, name, user_message, history): name
-            for name in agents_to_call
-        }
-        for future in concurrent.futures.as_completed(futures):
-            agent_name = futures[future]
-            try:
-                reply = future.result()
-                if reply:
-                    memory.save_group_message(agent_name, reply)
-                    memory.log_activity(agent_name, "group_chat", reply[:100])
-                    responses.append({"agent": agent_name, "content": reply})
-            except Exception as e:
-                logger.error(f"Group chat {agent_name} error: {e}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(agents_to_call), 1)) as executor:
+            futures = {
+                executor.submit(_get_agent_response, name, user_message, history): name
+                for name in agents_to_call
+            }
+            for future in concurrent.futures.as_completed(futures):
+                agent_name = futures[future]
+                try:
+                    reply = future.result()
+                    if reply:
+                        memory.save_group_message(agent_name, reply)
+                        memory.log_activity(agent_name, "group_chat", reply[:100])
+                        responses.append({"agent": agent_name, "content": reply})
+                except Exception as e:
+                    logger.error(f"Group chat {agent_name} error: {e}")
 
-    # Sort by role importance
+    # Sort by role importance (Shams always first)
     order = {"shams": 0, "wakil": 1, "rumi": 2, "leo": 3, "scout": 4, "builder": 5}
     responses.sort(key=lambda r: order.get(r["agent"], 9))
 
