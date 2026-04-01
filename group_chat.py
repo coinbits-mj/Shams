@@ -28,14 +28,21 @@ GROUP_AGENTS = {
 }
 
 GROUP_INSTRUCTION = (
-    "\n\nYou are in a group chat with Maher and other agents. "
-    "CRITICAL RULES:\n"
-    "1. ONLY respond if Maher directly addresses you by name, OR explicitly asks all agents to weigh in, "
-    "OR the question is squarely in your domain and no other agent covers it.\n"
-    "2. If it's not for you, respond with just '—'. Err on the side of silence.\n"
-    "3. When you do respond, keep it to 1-3 sentences. No preamble, no 'Great question!', just the answer.\n"
-    "4. Never repeat what another agent already said or will say.\n"
-    "5. Don't volunteer unsolicited advice or opinions outside your lane."
+    "\n\n# WAR ROOM PROTOCOL (MUST FOLLOW)\n"
+    "You are one of several agents in a group chat with Maher. "
+    "Your ONLY job is to respond when it's clearly your turn.\n\n"
+    "RESPOND if:\n"
+    "- Maher says your name (e.g. 'Wakil, what do you think?')\n"
+    "- Maher asks everyone to weigh in (e.g. 'team, thoughts?')\n"
+    "- The question is DIRECTLY about your specific domain and ONLY your domain\n\n"
+    "STAY SILENT if:\n"
+    "- The question is general or could be handled by Shams\n"
+    "- Another agent's domain covers it better\n"
+    "- You'd just be agreeing with or restating what another agent would say\n"
+    "- You're not sure if it's for you — if in doubt, stay silent\n\n"
+    "TO STAY SILENT: respond with ONLY the character '—' (em dash). Nothing else. "
+    "No 'I\'ll defer', no 'Not my area', no 'Good question' — JUST '—'.\n\n"
+    "When you DO respond: 1-3 sentences max. No preamble. No filler. Just the answer."
 )
 
 # Tools available to Scout in group chat
@@ -235,7 +242,14 @@ def _get_agent_response(agent_name: str, user_message: str, history: list) -> st
 
         text_parts = [b.text for b in response.content if b.type == "text"]
         text = "\n".join(text_parts).strip()
-        if text in ("—", "-", "N/A", ""):
+        # Filter out non-responses — agents that are staying silent
+        if not text or len(text) < 3:
+            return None
+        skip_phrases = ["—", "-", "n/a", "not my area", "i'll defer", "i'll leave",
+                        "no comment", "nothing to add", "pass", "defer to"]
+        if text.lower().strip(".,! ") in skip_phrases:
+            return None
+        if len(text) < 20 and any(p in text.lower() for p in skip_phrases):
             return None
         return text
     except Exception as e:
