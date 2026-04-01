@@ -8,7 +8,6 @@ const nav = [
   { to: '/actions', label: 'actions', icon: ShieldCheck, badgeKey: 'actions_pending' },
   { to: '/inbox', label: 'inbox', icon: Inbox, badgeKey: 'inbox_p1p2' },
   { to: '/war-room', label: 'war room', icon: Users },
-  { to: '/chat', label: 'chat', icon: MessageSquare },
   { to: '/conversations', label: 'history', icon: History },
   { to: '/memory', label: 'memory', icon: Brain },
   { to: '/loops', label: 'open loops', icon: RefreshCw },

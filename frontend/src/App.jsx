@@ -3,7 +3,7 @@ import { getSession } from './api';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import MissionControl from './pages/MissionControl';
-import Chat from './pages/Chat';
+// Chat is now embedded in MissionControl sidebar
 import WarRoom from './pages/WarRoom';
 import Memory from './pages/Memory';
 import Loops from './pages/Loops';
@@ -33,7 +33,7 @@ export default function App() {
           <Route path="missions" element={<MissionControl />} />
           <Route path="actions" element={<Actions />} />
           <Route path="inbox" element={<Inbox />} />
-          <Route path="chat" element={<Chat />} />
+          {/* Chat is embedded in Mission Control sidebar */}
           <Route path="war-room" element={<WarRoom />} />
           <Route path="conversations" element={<Conversations />} />
           <Route path="memory" element={<Memory />} />
