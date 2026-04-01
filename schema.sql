@@ -126,6 +126,24 @@ CREATE INDEX IF NOT EXISTS idx_missions_agent ON shams_missions (assigned_agent)
 CREATE INDEX IF NOT EXISTS idx_activity_feed_ts ON shams_activity_feed (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_agent ON shams_activity_feed (agent_name, timestamp DESC);
 
+CREATE TABLE IF NOT EXISTS shams_notifications (
+    id              SERIAL PRIMARY KEY,
+    event_type      VARCHAR(50) NOT NULL,
+    title           VARCHAR(500) NOT NULL,
+    detail          TEXT DEFAULT '',
+    link_type       VARCHAR(20) DEFAULT '',
+    link_id         INTEGER,
+    seen            BOOLEAN DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON shams_notifications (seen, created_at DESC);
+
+-- Add mission_id to files (idempotent via DO block)
+DO $$ BEGIN
+    ALTER TABLE shams_files ADD COLUMN mission_id INTEGER REFERENCES shams_missions(id);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS shams_email_triage (
     id              SERIAL PRIMARY KEY,
     account         VARCHAR(50) NOT NULL,

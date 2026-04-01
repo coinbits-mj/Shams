@@ -16,6 +16,7 @@ import Conversations from './pages/Conversations';
 import Actions from './pages/Actions';
 import Inbox from './pages/Inbox';
 import Settings from './pages/Settings';
+import ToastProvider from './components/ToastProvider';
 
 function ProtectedRoute({ children }) {
   return getSession() ? children : <Navigate to="/login" />;
@@ -24,6 +25,7 @@ function ProtectedRoute({ children }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <ToastProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
@@ -44,6 +46,7 @@ export default function App() {
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
+      </ToastProvider>
     </BrowserRouter>
   );
 }

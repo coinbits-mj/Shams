@@ -748,6 +748,13 @@ def get_mission(mission_id):
         cur.execute("SELECT * FROM shams_actions WHERE mission_id = %s ORDER BY created_at", (mission_id,))
         actions = cur.fetchall()
 
+        # Get linked files
+        cur.execute(
+            "SELECT id, filename, file_type, summary, uploaded_at FROM shams_files WHERE mission_id = %s ORDER BY uploaded_at",
+            (mission_id,)
+        )
+        files = cur.fetchall()
+
         # Get related activity feed entries (matching mission ID in content)
         cur.execute(
             "SELECT * FROM shams_activity_feed WHERE content LIKE %s ORDER BY timestamp",
@@ -770,6 +777,13 @@ def get_mission(mission_id):
             ad["payload"] = json.loads(ad["payload"])
         d["actions"].append(ad)
 
+    d["files"] = []
+    for fi in files:
+        fid = dict(fi)
+        if fid.get("uploaded_at"):
+            fid["uploaded_at"] = fid["uploaded_at"].isoformat()
+        d["files"].append(fid)
+
     d["activity"] = []
     for f in activity:
         fd = dict(f)
@@ -790,6 +804,37 @@ def update_mission(mission_id):
     if data.get("status"):
         memory.log_activity("shams", "mission_update", f"Mission #{mission_id} → {data['status']}")
     return jsonify({"ok": True})
+
+
+# ── Notifications ───────────────────────────────────────────────────────────
+
+@api.route("/notifications", methods=["GET"])
+@require_auth
+def get_notifications():
+    notifs = memory.get_unseen_notifications(30)
+    result = []
+    for n in notifs:
+        d = dict(n)
+        if d.get("created_at"):
+            d["created_at"] = d["created_at"].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/notifications/mark-seen", methods=["POST"])
+@require_auth
+def mark_seen():
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids", [])
+    memory.mark_notifications_seen(ids)
+    return jsonify({"ok": True})
+
+
+@api.route("/notifications/counts", methods=["GET"])
+@require_auth
+def notification_counts():
+    counts = memory.get_notification_counts()
+    return jsonify(counts)
 
 
 # ── Inbox Triage ────────────────────────────────────────────────────────────
@@ -948,6 +993,19 @@ def batch_archive():
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 
+def _auto_advance_mission(action: dict):
+    """If an action is linked to a mission, check if all actions are done and advance."""
+    mission_id = action.get("mission_id")
+    if not mission_id:
+        return
+    actions = memory.get_actions_for_mission(mission_id)
+    all_done = all(a["status"] in ("completed", "rejected") for a in actions)
+    if all_done:
+        memory.update_mission(mission_id, status="review")
+        memory.log_activity(action["agent_name"], "mission_update", f"Mission #{mission_id} → review (all actions complete)")
+        memory.create_notification("mission_updated", f"Mission #{mission_id} ready for review", "", "mission", mission_id)
+
+
 @api.route("/actions", methods=["GET"])
 @require_auth
 def get_actions():
@@ -1040,11 +1098,15 @@ def execute_action(action_id):
             result = f"PR #{pr['number']} created: {pr['url']}"
             memory.update_action_status(action_id, "completed", result)
             memory.log_activity("builder", "action_completed", f"Action #{action_id}: {result}")
+            memory.create_notification("action_completed", f"PR created: {payload['title']}", result, "action", action_id)
+            _auto_advance_mission(a)
             return jsonify({"ok": True, "result": result, "pr": pr})
         else:
             # Generic actions — mark completed, no auto-execution
             memory.update_action_status(action_id, "completed", "Executed manually")
             memory.log_activity(a["agent_name"], "action_completed", f"Action #{action_id} executed")
+            memory.create_notification("action_completed", a["title"], "", "action", action_id)
+            _auto_advance_mission(a)
             return jsonify({"ok": True, "result": "Action marked as executed"})
 
     except Exception as e:

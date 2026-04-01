@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { post, get, upload } from '../api';
 import { Send, Sun, Activity, Heart, Scale, Search, Wrench, Paperclip, X, FileText, Image } from 'lucide-react';
+import SmartMessage from '../components/SmartMessage';
 
 const agentConfig = {
   maher: { color: '#e2e8f0', icon: null, label: 'Maher' },
@@ -131,7 +132,7 @@ export default function WarRoom() {
                       borderColor: `${cfg.color}20`,
                       color: 'var(--text-primary)',
                     } : {}}>
-                    {m.content}
+                    <SmartMessage content={m.content} />
                   </div>
                   <span className="text-[10px] text-[var(--text-muted)] ml-1 mt-0.5 block">
                     {m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}

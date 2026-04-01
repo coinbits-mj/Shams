@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { get, post, patch } from '../api';
-import { Plus, Sun, Activity, Heart, Search, Zap, ChevronRight, X } from 'lucide-react';
+import { Plus, Sun, Activity, Heart, Search, Zap, ChevronRight, X, FileText } from 'lucide-react';
+import SmartMessage from '../components/SmartMessage';
+import FilePreviewModal from '../components/FilePreviewModal';
 
 const agentIcons = { shams: Sun, rumi: Activity, leo: Heart };
 const statusColors = { active: '#22c55e', idle: '#f59e0b', offline: '#475569', error: '#ef4444' };
@@ -17,6 +19,7 @@ export default function MissionControl() {
   const [feedType, setFeedType] = useState('');
   const [selectedMission, setSelectedMission] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
+  const [previewFileId, setPreviewFileId] = useState(null);
 
   async function load() {
     const feedParams = new URLSearchParams({ limit: '30' });
@@ -204,7 +207,7 @@ export default function MissionControl() {
                     {f.timestamp ? new Date(f.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--text-secondary)]">{f.content}</p>
+                <p className="text-xs text-[var(--text-secondary)]"><SmartMessage content={f.content} /></p>
               </div>
             );
           })}
@@ -395,6 +398,28 @@ export default function MissionControl() {
                 </div>
               )}
 
+              {/* Linked files */}
+              {selectedMission.files?.length > 0 && (
+                <div>
+                  <span className="text-xs text-[var(--text-muted)] mono-heading">files ({selectedMission.files.length})</span>
+                  <div className="mt-1 space-y-1.5">
+                    {selectedMission.files.map(f => (
+                      <div key={f.id} className="flex items-center justify-between p-2 rounded bg-[var(--bg-card)] border border-[var(--border)] cursor-pointer hover:border-[var(--border-bright)]"
+                        onClick={() => setPreviewFileId(f.id)}>
+                        <div className="flex items-center gap-2">
+                          <FileText size={12} className="text-[#22c55e]" />
+                          <span className="text-xs text-[var(--text-primary)]">{f.filename}</span>
+                          <span className="text-[10px] text-[var(--text-muted)]">{f.file_type?.replace('_', ' ')}</span>
+                        </div>
+                        <span className="text-[10px] text-[var(--text-muted)]">
+                          {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString() : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Timeline */}
               {selectedMission.activity?.length > 0 && (
                 <div>
@@ -424,6 +449,9 @@ export default function MissionControl() {
           </div>
         </div>
       )}
+
+      {/* File preview modal */}
+      {previewFileId && <FilePreviewModal fileId={previewFileId} onClose={() => setPreviewFileId(null)} />}
     </div>
   );
 }

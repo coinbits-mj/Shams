@@ -150,14 +150,14 @@ def get_folders(parent_id: int | None = None) -> list[dict]:
 def save_file(filename: str, file_type: str, mime_type: str = "", file_size: int = 0,
               folder_id: int | None = None, telegram_file_id: str = "",
               summary: str = "", transcript: str = "", tags: list = None,
-              conversation_id: int | None = None) -> int:
+              conversation_id: int | None = None, mission_id: int | None = None) -> int:
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}files (filename, file_type, mime_type, file_size, folder_id, "
-            f"telegram_file_id, summary, transcript, tags, conversation_id) "
-            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            f"telegram_file_id, summary, transcript, tags, conversation_id, mission_id) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (filename, file_type, mime_type, file_size, folder_id,
-             telegram_file_id, summary, transcript, tags or [], conversation_id),
+             telegram_file_id, summary, transcript, tags or [], conversation_id, mission_id),
         )
         return cur.fetchone()[0]
 
@@ -338,6 +338,53 @@ def get_activity_feed(limit: int = 50, agent: str | None = None,
         return cur.fetchall()
 
 
+# ── Notifications ───────────────────────────────────────────────────────────
+
+def create_notification(event_type: str, title: str, detail: str = "",
+                        link_type: str = "", link_id: int | None = None):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}notifications (event_type, title, detail, link_type, link_id) "
+            f"VALUES (%s, %s, %s, %s, %s)",
+            (event_type, title, detail, link_type, link_id),
+        )
+
+
+def get_unseen_notifications(limit: int = 20) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}notifications WHERE seen = FALSE "
+            f"ORDER BY created_at DESC LIMIT %s", (limit,)
+        )
+        return cur.fetchall()
+
+
+def mark_notifications_seen(ids: list[int]):
+    if not ids:
+        return
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}notifications SET seen = TRUE WHERE id = ANY(%s)", (ids,)
+        )
+
+
+def get_notification_counts() -> dict:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM {P}notifications WHERE seen = FALSE")
+        unseen = cur.fetchone()[0]
+        cur.execute(f"SELECT COUNT(*) FROM {P}actions WHERE status = 'pending'")
+        pending_actions = cur.fetchone()[0]
+        cur.execute(
+            f"SELECT COUNT(*) FROM {P}email_triage WHERE priority IN ('P1','P2') AND archived = FALSE"
+        )
+        inbox_urgent = cur.fetchone()[0]
+    return {
+        "unseen_total": unseen,
+        "actions_pending": pending_actions,
+        "inbox_p1p2": inbox_urgent,
+    }
+
+
 # ── Email Triage ────────────────────────────────────────────────────────────
 
 def save_triage_result(account: str, message_id: str, from_addr: str, subject: str,
@@ -447,6 +494,16 @@ def update_action_status(action_id: int, status: str, result: str = ""):
                 f"UPDATE {P}actions SET status = %s WHERE id = %s",
                 (status, action_id),
             )
+
+
+# ── Action Helpers ──────────────────────────────────────────────────────────
+
+def get_actions_for_mission(mission_id: int) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}actions WHERE mission_id = %s ORDER BY created_at", (mission_id,)
+        )
+        return cur.fetchall()
 
 
 # ── Trust Scores ────────────────────────────────────────────────────────────

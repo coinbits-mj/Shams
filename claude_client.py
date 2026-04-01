@@ -283,6 +283,7 @@ TOOLS = [
                 "title": {"type": "string", "description": "Document title"},
                 "instructions": {"type": "string", "description": "What the document should cover — parties, terms, key provisions, context"},
                 "context": {"type": "string", "description": "Relevant background (deal details, prior negotiations, etc.)"},
+                "mission_id": {"type": "integer", "description": "Optional mission ID this document relates to"},
             },
             "required": ["document_type", "title", "instructions"],
         },
@@ -509,6 +510,7 @@ def _execute_tool(name: str, input_data: dict) -> str:
             )
             agent = input_data.get("assigned_agent", "unassigned")
             memory.log_activity("shams", "mission_created", f"Mission #{mission_id}: {input_data['title']} → {agent}")
+            memory.create_notification("mission_created", f"New mission: {input_data['title']}", f"Assigned to {agent}", "mission", mission_id)
             return f"Mission #{mission_id} created: {input_data['title']} (assigned to {agent})"
 
         elif name == "update_mission":
@@ -518,8 +520,10 @@ def _execute_tool(name: str, input_data: dict) -> str:
             if input_data.get("result"):
                 kwargs["result"] = input_data["result"]
             memory.update_mission(input_data["mission_id"], **kwargs)
+            status_label = input_data.get('status', 'updated')
             memory.log_activity("shams", "mission_update",
-                f"Mission #{input_data['mission_id']} → {input_data.get('status', 'updated')}")
+                f"Mission #{input_data['mission_id']} → {status_label}")
+            memory.create_notification("mission_updated", f"Mission #{input_data['mission_id']} → {status_label}", "", "mission", input_data["mission_id"])
             return f"Mission #{input_data['mission_id']} updated."
 
         elif name == "draft_legal_document":
@@ -564,6 +568,7 @@ def _execute_tool(name: str, input_data: dict) -> str:
             draft_text = draft_response.content[0].text
 
             # Save to files table
+            mission_id = input_data.get("mission_id")
             filename = f"{doc_type}_{title.lower().replace(' ', '_')[:40]}.md"
             file_id = memory.save_file(
                 filename=filename,
@@ -572,10 +577,18 @@ def _execute_tool(name: str, input_data: dict) -> str:
                 file_size=len(draft_text),
                 summary=f"[{doc_type.upper()}] {title}",
                 transcript=draft_text,
+                mission_id=mission_id,
             )
             memory.log_activity("wakil", "document_drafted",
                 f"Legal draft: {title} (file #{file_id})",
                 {"document_type": doc_type, "file_id": file_id})
+            memory.create_notification("document_ready", f"{doc_type.upper()}: {title} ready for review", "", "file", file_id)
+
+            # Auto-advance linked mission to review
+            if mission_id:
+                memory.update_mission(mission_id, status="review")
+                memory.log_activity("wakil", "mission_update", f"Mission #{mission_id} → review (document drafted)")
+                memory.create_notification("mission_updated", f"Mission #{mission_id} moved to review", "Document ready", "mission", mission_id)
 
             return f"Document drafted and saved as file #{file_id}: {title}\n\nPreview:\n{draft_text[:500]}..."
 
@@ -622,6 +635,7 @@ def _execute_tool(name: str, input_data: dict) -> str:
                 title=input_data["title"],
                 description=input_data.get("description", ""),
                 payload=input_data.get("payload"),
+                mission_id=input_data.get("mission_id"),
             )
             memory.increment_trust("shams", "total_proposed")
             # Check auto-approve
@@ -631,6 +645,7 @@ def _execute_tool(name: str, input_data: dict) -> str:
                 memory.log_activity("shams", "action_auto_approved", f"Action #{action_id} auto-approved: {input_data['title']}")
                 return f"Action #{action_id} auto-approved: {input_data['title']}"
             memory.log_activity("shams", "action_proposed", f"Action #{action_id}: {input_data['title']}")
+            memory.create_notification("action_pending", input_data["title"], "", "action", action_id)
             return f"Action #{action_id} proposed: {input_data['title']}. Waiting for Maher's approval in the dashboard."
 
         elif name == "remember":

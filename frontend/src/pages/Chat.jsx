@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { post, get, upload } from '../api';
 import { Send, Paperclip, X, FileText, Image } from 'lucide-react';
+import SmartMessage from '../components/SmartMessage';
 
 export default function Chat() {
   const [messages, setMessages] = useState([]);
@@ -66,7 +67,7 @@ export default function Chat() {
                 ? 'bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)]'
                 : 'glass-card text-[var(--text-primary)]'
             }`}>
-              {m.content}
+              <SmartMessage content={m.content} />
             </div>
           </div>
         ))}
