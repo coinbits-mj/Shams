@@ -27,23 +27,53 @@ GROUP_AGENTS = {
     "scout": lambda: "",
 }
 
-GROUP_INSTRUCTION = (
-    "\n\n# WAR ROOM PROTOCOL (MUST FOLLOW)\n"
-    "You are one of several agents in a group chat with Maher. "
-    "Your ONLY job is to respond when it's clearly your turn.\n\n"
-    "RESPOND if:\n"
-    "- Maher says your name (e.g. 'Wakil, what do you think?')\n"
-    "- Maher asks everyone to weigh in (e.g. 'team, thoughts?')\n"
-    "- The question is DIRECTLY about your specific domain and ONLY your domain\n\n"
-    "STAY SILENT if:\n"
-    "- The question is general or could be handled by Shams\n"
-    "- Another agent's domain covers it better\n"
-    "- You'd just be agreeing with or restating what another agent would say\n"
-    "- You're not sure if it's for you — if in doubt, stay silent\n\n"
-    "TO STAY SILENT: respond with ONLY the character '—' (em dash). Nothing else. "
-    "No 'I\'ll defer', no 'Not my area', no 'Good question' — JUST '—'.\n\n"
-    "When you DO respond: 1-3 sentences max. No preamble. No filler. Just the answer."
+GROUP_INSTRUCTION_DEFAULT = (
+    "\n\nYou are in a group chat. Keep responses concise (1-3 sentences). "
+    "Be direct, no preamble, no filler."
 )
+
+GROUP_INSTRUCTION_TEAM = (
+    "\n\n# WAR ROOM — TEAM MODE\n"
+    "Maher has asked the whole team to weigh in. "
+    "Shams is the team leader and should synthesize and delegate. "
+    "Other agents: contribute ONLY your domain expertise. 1-3 sentences. "
+    "Don't repeat what others will say. Be direct."
+)
+
+GROUP_INSTRUCTION_SILENT = (
+    "\n\nYou are in a group chat but you were NOT addressed. "
+    "Respond with ONLY '—'. Nothing else."
+)
+
+def _parse_mentions(message: str) -> set:
+    """Parse @mentions from a message. Returns set of agent names mentioned."""
+    msg_lower = message.lower()
+    # Check for @group / @team / @all / @everyone
+    if any(tag in msg_lower for tag in ["@group", "@team", "@all", "@everyone"]):
+        return {"all"}
+    # Check for @agent mentions
+    mentioned = set()
+    for name in GROUP_AGENTS:
+        if f"@{name}" in msg_lower:
+            mentioned.add(name)
+    return mentioned
+
+
+def _get_instruction(agent_name: str, user_message: str) -> str:
+    """Get the right instruction for this agent based on whether they were addressed."""
+    mentions = _parse_mentions(user_message)
+    if "all" in mentions:
+        return GROUP_INSTRUCTION_TEAM
+    if mentions and agent_name in mentions:
+        return GROUP_INSTRUCTION_DEFAULT
+    if not mentions and agent_name == "shams":
+        # Shams always responds by default
+        return GROUP_INSTRUCTION_DEFAULT
+    if mentions and agent_name not in mentions:
+        return GROUP_INSTRUCTION_SILENT
+    # No mentions, not shams → silent
+    return GROUP_INSTRUCTION_SILENT
+
 
 # Tools available to Scout in group chat
 SCOUT_TOOLS = [
@@ -203,7 +233,7 @@ def _get_agent_response(agent_name: str, user_message: str, history: list) -> st
     except Exception as e:
         context = f"Context error: {e}"
 
-    system = build_agent_system_prompt(agent_name, context) + GROUP_INSTRUCTION
+    system = build_agent_system_prompt(agent_name, context) + _get_instruction(agent_name, user_message)
 
     try:
         agent = AGENT_DEFS.get(agent_name, {})
@@ -258,15 +288,29 @@ def _get_agent_response(agent_name: str, user_message: str, history: list) -> st
 
 
 def send_group_message(user_message: str) -> list[dict]:
-    """Send a message to the group chat. All agents respond in parallel."""
+    """Send a message to the group chat. Routes to the right agents based on @mentions."""
     memory.save_group_message("maher", user_message)
     history = memory.get_group_messages(30)
 
+    mentions = _parse_mentions(user_message)
+
+    if "all" in mentions:
+        # @group — everyone responds
+        agents_to_call = list(GROUP_AGENTS.keys())
+    elif mentions:
+        # Specific @agent(s) — only those agents + shams (as leader)
+        agents_to_call = list(mentions)
+        if "shams" not in agents_to_call:
+            agents_to_call.insert(0, "shams")
+    else:
+        # No mentions — only Shams responds
+        agents_to_call = ["shams"]
+
     responses = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(GROUP_AGENTS)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(len(agents_to_call), 1)) as executor:
         futures = {
             executor.submit(_get_agent_response, name, user_message, history): name
-            for name in GROUP_AGENTS
+            for name in agents_to_call
         }
         for future in concurrent.futures.as_completed(futures):
             agent_name = futures[future]
