@@ -396,7 +396,7 @@ TOOLS = [
                         "properties": {
                             "agent_name": {"type": "string", "enum": ["shams", "rumi", "leo", "wakil", "scout", "builder"]},
                             "instruction": {"type": "string", "description": "What this agent should do in this step"},
-                            "requires_approval": {"type": "boolean", "default": false},
+                            "requires_approval": {"type": "boolean"},
                         },
                         "required": ["agent_name", "instruction"],
                     },
