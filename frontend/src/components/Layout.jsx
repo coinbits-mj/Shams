@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug, ShieldCheck, Inbox, Settings, Zap } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, DollarSign, History, Plug, ShieldCheck, Inbox, Settings, Zap, Target, Send } from 'lucide-react';
 import { useNotifications } from './ToastProvider';
 
 const nav = [
@@ -15,7 +15,9 @@ const nav = [
   { to: '/decisions', label: 'decisions', icon: Scale },
   { to: '/briefings', label: 'briefings', icon: FileText },
   { to: '/files', label: 'files', icon: FolderOpen },
-  { to: '/mercury', label: 'mercury', icon: Landmark },
+  { to: '/money', label: 'money', icon: DollarSign },
+  { to: '/deals', label: 'deals', icon: Target },
+  { to: '/delegations', label: 'delegations', icon: Send },
   { to: '/integrations', label: 'integrations', icon: Plug },
   { to: '/settings', label: 'settings', icon: Settings },
 ];

@@ -616,6 +616,71 @@ def agent_health_check():
         memory.update_agent_status(agent_name, status)
 
 
+def smart_alerts_check():
+    """Check all alert rules and fire notifications when conditions met."""
+    try:
+        rules = memory.get_alert_rules(enabled_only=True)
+        if not rules:
+            return
+
+        # Gather metrics
+        metrics = {}
+        try:
+            import mercury_client
+            balances = mercury_client.get_balances()
+            metrics["cash_total"] = balances.get("grand_total", 0) if balances else 0
+        except Exception:
+            pass
+        try:
+            import rumi_client
+            daily = rumi_client.get_daily_pl("yesterday") or {}
+            metrics["food_cost_pct"] = daily.get("food_cost_pct", 0)
+            metrics["labor_cost_pct"] = daily.get("labor_cost_pct", 0)
+            metrics["net_margin_pct"] = daily.get("net_margin_pct", 0)
+            metrics["daily_revenue"] = daily.get("revenue", 0)
+        except Exception:
+            pass
+
+        # Check deals approaching deadlines
+        try:
+            from config import DATABASE_URL
+            import psycopg2, psycopg2.extras
+            with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT COUNT(*) as cnt FROM shams_deals WHERE deadline IS NOT NULL "
+                    "AND deadline <= CURRENT_DATE + INTERVAL '3 days' AND stage NOT IN ('closed', 'dead')"
+                )
+                metrics["deals_expiring_soon"] = cur.fetchone()["cnt"]
+        except Exception:
+            pass
+
+        for rule in rules:
+            metric_val = metrics.get(rule["metric"])
+            if metric_val is None:
+                continue
+            threshold = float(rule["threshold"])
+            triggered = False
+            if rule["condition"] == "<" and metric_val < threshold:
+                triggered = True
+            elif rule["condition"] == ">" and metric_val > threshold:
+                triggered = True
+            elif rule["condition"] == "<=" and metric_val <= threshold:
+                triggered = True
+            elif rule["condition"] == ">=" and metric_val >= threshold:
+                triggered = True
+
+            if triggered:
+                msg = rule["message_template"].replace("{value}", str(round(metric_val, 1)))
+                memory.log_activity("shams", "smart_alert", msg)
+                memory.create_notification("smart_alert", msg, "", "", None)
+                memory.update_alert_rule(rule["id"], last_triggered="NOW()")
+                if config.TELEGRAM_CHAT_ID:
+                    send_telegram(config.TELEGRAM_CHAT_ID, f"Alert: {msg}")
+
+    except Exception as e:
+        logger.error(f"Smart alerts check error: {e}", exc_info=True)
+
+
 def mission_stale_check():
     """Daily: flag missions stuck in 'active' for > 48 hours."""
     try:
@@ -658,6 +723,7 @@ if __name__ == "__main__":
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
     scheduler.add_job(agent_health_check, "interval", minutes=5, id="health_check")
     scheduler.add_job(mission_stale_check, "cron", hour=12, minute=0, id="stale_check")  # noon UTC
+    scheduler.add_job(smart_alerts_check, "interval", hours=1, id="smart_alerts")  # every hour
     scheduler.start()
     logger.info(f"Scheduler started — morning @ {config.BRIEFING_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
     logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily)")

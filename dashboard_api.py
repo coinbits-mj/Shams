@@ -239,6 +239,77 @@ def get_today():
     return jsonify(result)
 
 
+# ── Money View ──────────────────────────────────────────────────────────────
+
+@api.route("/money", methods=["GET"])
+@require_auth
+def get_money():
+    """Unified financial dashboard — cash, P&L, trends, alerts."""
+    result = {}
+
+    # Cash across all Mercury accounts
+    try:
+        result["cash"] = mercury_client.get_balances() or {}
+    except Exception:
+        result["cash"] = {}
+
+    # Recent transactions (last 7 days)
+    try:
+        result["transactions"] = mercury_client.get_recent_transactions(days=7) or []
+    except Exception:
+        result["transactions"] = []
+
+    # Daily P&L
+    try:
+        result["daily_pl"] = rumi_client.get_daily_pl("yesterday") or {}
+    except Exception:
+        result["daily_pl"] = {}
+
+    # Monthly P&L
+    try:
+        result["monthly_pl"] = rumi_client.get_monthly_pl() or {}
+    except Exception:
+        result["monthly_pl"] = {}
+
+    # Cash flow forecast
+    try:
+        result["forecast"] = rumi_client.get_cashflow_forecast() or {}
+    except Exception:
+        result["forecast"] = {}
+
+    # Labor analysis
+    try:
+        result["labor"] = rumi_client.get_labor_analysis() or {}
+    except Exception:
+        result["labor"] = {}
+
+    # Scorecard
+    try:
+        result["scorecard"] = rumi_client.get_scorecard() or {}
+    except Exception:
+        result["scorecard"] = {}
+
+    # Alerts — flag anything concerning
+    alerts = []
+    cash_total = result["cash"].get("grand_total", 0)
+    if cash_total and cash_total < 50000:
+        alerts.append({"level": "warning", "message": f"Cash below $50K: ${cash_total:,.0f}"})
+    if cash_total and cash_total < 25000:
+        alerts.append({"level": "critical", "message": f"Cash critically low: ${cash_total:,.0f}"})
+
+    daily = result["daily_pl"]
+    if daily.get("food_cost_pct") and daily["food_cost_pct"] > 35:
+        alerts.append({"level": "warning", "message": f"Food cost high: {daily['food_cost_pct']:.1f}%"})
+    if daily.get("labor_cost_pct") and daily["labor_cost_pct"] > 35:
+        alerts.append({"level": "warning", "message": f"Labor cost high: {daily['labor_cost_pct']:.1f}%"})
+    if daily.get("net_margin_pct") is not None and daily["net_margin_pct"] < 0:
+        alerts.append({"level": "critical", "message": f"Negative margin: {daily['net_margin_pct']:.1f}%"})
+
+    result["alerts"] = alerts
+
+    return jsonify(result)
+
+
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
 def _process_uploaded_files(req) -> tuple:
@@ -919,6 +990,159 @@ def update_mission(mission_id):
     memory.update_mission(mission_id, **data)
     if data.get("status"):
         memory.log_activity("shams", "mission_update", f"Mission #{mission_id} → {data['status']}")
+    return jsonify({"ok": True})
+
+
+# ── Alert Rules ─────────────────────────────────────────────────────────────
+
+@api.route("/alert-rules", methods=["GET"])
+@require_auth
+def get_alert_rules():
+    rules = memory.get_alert_rules()
+    result = []
+    for r in rules:
+        d = dict(r)
+        for k in ("last_triggered", "created_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat() if hasattr(d[k], 'isoformat') else str(d[k])
+        if d.get("threshold"):
+            d["threshold"] = float(d["threshold"])
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/alert-rules", methods=["POST"])
+@require_auth
+def create_alert_rule():
+    data = request.get_json(silent=True) or {}
+    rule_id = memory.create_alert_rule(
+        name=data.get("name", ""),
+        metric=data.get("metric", ""),
+        condition=data.get("condition", "<"),
+        threshold=data.get("threshold", 0),
+        message_template=data.get("message_template", ""),
+    )
+    return jsonify({"id": rule_id})
+
+
+@api.route("/alert-rules/<int:rule_id>", methods=["PATCH"])
+@require_auth
+def update_alert_rule(rule_id):
+    data = request.get_json(silent=True) or {}
+    memory.update_alert_rule(rule_id, **{k: v for k, v in data.items() if k in ("name", "enabled", "threshold", "condition", "message_template")})
+    return jsonify({"ok": True})
+
+
+# ── Delegations (MJ's Outbox) ───────────────────────────────────────────────
+
+@api.route("/delegations", methods=["GET"])
+@require_auth
+def get_delegations():
+    """Everything MJ has asked for — missions, actions, workflows — in one view."""
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    items = []
+
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        # Active missions
+        cur.execute(
+            "SELECT id, title, status, priority, assigned_agent, created_at, updated_at, result "
+            "FROM shams_missions WHERE status NOT IN ('done', 'dropped') ORDER BY created_at DESC LIMIT 30"
+        )
+        for m in cur.fetchall():
+            items.append({
+                "type": "mission", "id": m["id"], "title": m["title"],
+                "status": m["status"], "agent": m["assigned_agent"],
+                "priority": m["priority"], "result": m.get("result", ""),
+                "created_at": m["created_at"].isoformat() if m.get("created_at") else "",
+                "updated_at": m["updated_at"].isoformat() if m.get("updated_at") else "",
+            })
+
+        # Pending/executing actions
+        cur.execute(
+            "SELECT id, agent_name, action_type, title, status, created_at, resolved_at, result "
+            "FROM shams_actions WHERE status IN ('pending', 'approved', 'executing') ORDER BY created_at DESC LIMIT 20"
+        )
+        for a in cur.fetchall():
+            items.append({
+                "type": "action", "id": a["id"], "title": a["title"],
+                "status": a["status"], "agent": a["agent_name"],
+                "action_type": a["action_type"], "result": a.get("result", ""),
+                "created_at": a["created_at"].isoformat() if a.get("created_at") else "",
+                "updated_at": a["resolved_at"].isoformat() if a.get("resolved_at") else "",
+            })
+
+        # Active workflows
+        cur.execute(
+            "SELECT id, title, status, current_step, created_at, updated_at "
+            "FROM shams_workflows WHERE status = 'active' ORDER BY created_at DESC LIMIT 10"
+        )
+        for w in cur.fetchall():
+            items.append({
+                "type": "workflow", "id": w["id"], "title": w["title"],
+                "status": f"step {w['current_step']}", "agent": "shams",
+                "created_at": w["created_at"].isoformat() if w.get("created_at") else "",
+                "updated_at": w["updated_at"].isoformat() if w.get("updated_at") else "",
+            })
+
+        # Recently completed (last 10)
+        cur.execute(
+            "SELECT id, title, status, assigned_agent, result, updated_at "
+            "FROM shams_missions WHERE status IN ('done', 'dropped') ORDER BY updated_at DESC LIMIT 10"
+        )
+        for m in cur.fetchall():
+            items.append({
+                "type": "mission", "id": m["id"], "title": m["title"],
+                "status": m["status"], "agent": m["assigned_agent"],
+                "result": m.get("result", ""),
+                "created_at": "", "updated_at": m["updated_at"].isoformat() if m.get("updated_at") else "",
+                "completed": True,
+            })
+
+    # Sort: incomplete first (by created_at desc), then completed
+    incomplete = sorted([i for i in items if not i.get("completed")], key=lambda x: x.get("created_at", ""), reverse=True)
+    completed = [i for i in items if i.get("completed")]
+    return jsonify({"active": incomplete, "completed": completed})
+
+
+# ── Deals ───────────────────────────────────────────────────────────────────
+
+@api.route("/deals", methods=["GET"])
+@require_auth
+def get_deals():
+    stage = request.args.get("stage")
+    deals = memory.get_deals(stage)
+    result = []
+    for d in deals:
+        dd = dict(d)
+        for k in ("created_at", "updated_at", "deadline"):
+            if dd.get(k):
+                dd[k] = dd[k].isoformat() if hasattr(dd[k], 'isoformat') else str(dd[k])
+        if dd.get("value"):
+            dd["value"] = float(dd["value"])
+        result.append(dd)
+    return jsonify(result)
+
+
+@api.route("/deals", methods=["POST"])
+@require_auth
+def create_deal():
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    deal_id = memory.create_deal(title=title, **{k: v for k, v in data.items() if k != "title"})
+    memory.log_activity("shams", "deal_created", f"Deal #{deal_id}: {title}")
+    return jsonify({"id": deal_id})
+
+
+@api.route("/deals/<int:deal_id>", methods=["PATCH"])
+@require_auth
+def update_deal(deal_id):
+    data = request.get_json(silent=True) or {}
+    memory.update_deal(deal_id, **data)
+    if data.get("stage"):
+        memory.log_activity("shams", "deal_updated", f"Deal #{deal_id} → {data['stage']}")
     return jsonify({"ok": True})
 
 

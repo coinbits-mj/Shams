@@ -496,6 +496,83 @@ def update_action_status(action_id: int, status: str, result: str = ""):
             )
 
 
+# ── Deals ───────────────────────────────────────────────────────────────────
+
+def create_deal(title: str, deal_type: str = "acquisition", stage: str = "lead",
+                value: float = 0, contact: str = "", source: str = "",
+                location: str = "", next_action: str = "", deadline: str | None = None,
+                score: int = 0, notes: str = "", assigned_agent: str = "scout") -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}deals (title, deal_type, stage, value, contact, source, location, "
+            f"next_action, deadline, score, notes, assigned_agent) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (title, deal_type, stage, value, contact, source, location,
+             next_action, deadline, score, notes, assigned_agent),
+        )
+        return cur.fetchone()[0]
+
+
+def get_deals(stage: str | None = None, limit: int = 50) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if stage:
+            cur.execute(f"SELECT * FROM {P}deals WHERE stage = %s ORDER BY score DESC, updated_at DESC LIMIT %s", (stage, limit))
+        else:
+            cur.execute(f"SELECT * FROM {P}deals ORDER BY CASE stage "
+                       f"WHEN 'lead' THEN 0 WHEN 'researching' THEN 1 WHEN 'evaluating' THEN 2 "
+                       f"WHEN 'loi' THEN 3 WHEN 'due_diligence' THEN 4 WHEN 'closing' THEN 5 "
+                       f"WHEN 'closed' THEN 6 ELSE 7 END, score DESC LIMIT %s", (limit,))
+        return cur.fetchall()
+
+
+def update_deal(deal_id: int, **kwargs):
+    with _conn() as conn, conn.cursor() as cur:
+        sets = ["updated_at = NOW()"]
+        params = []
+        for k, v in kwargs.items():
+            if k in ("title", "deal_type", "stage", "value", "contact", "source",
+                     "location", "next_action", "deadline", "score", "notes", "assigned_agent"):
+                sets.append(f"{k} = %s")
+                params.append(v)
+        params.append(deal_id)
+        cur.execute(f"UPDATE {P}deals SET {', '.join(sets)} WHERE id = %s", params)
+
+
+# ── Alert Rules ─────────────────────────────────────────────────────────────
+
+def create_alert_rule(name: str, metric: str, condition: str, threshold: float,
+                      message_template: str) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}alert_rules (name, metric, condition, threshold, message_template) "
+            f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (name, metric, condition, threshold, message_template),
+        )
+        return cur.fetchone()[0]
+
+
+def get_alert_rules(enabled_only: bool = False) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if enabled_only:
+            cur.execute(f"SELECT * FROM {P}alert_rules WHERE enabled = TRUE ORDER BY created_at")
+        else:
+            cur.execute(f"SELECT * FROM {P}alert_rules ORDER BY created_at")
+        return cur.fetchall()
+
+
+def update_alert_rule(rule_id: int, **kwargs):
+    with _conn() as conn, conn.cursor() as cur:
+        sets, params = [], []
+        for k, v in kwargs.items():
+            if k in ("name", "metric", "condition", "threshold", "message_template", "enabled", "last_triggered"):
+                sets.append(f"{k} = %s")
+                params.append(v)
+        if not sets:
+            return
+        params.append(rule_id)
+        cur.execute(f"UPDATE {P}alert_rules SET {', '.join(sets)} WHERE id = %s", params)
+
+
 # ── Scheduled Tasks ─────────────────────────────────────────────────────────
 
 def create_scheduled_task(name: str, cron_expression: str, prompt: str,

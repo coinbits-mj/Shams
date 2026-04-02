@@ -11,6 +11,9 @@ import Decisions from './pages/Decisions';
 import Briefings from './pages/Briefings';
 import Files from './pages/Files';
 import Mercury from './pages/Mercury';
+import Money from './pages/Money';
+import Deals from './pages/Deals';
+import Delegations from './pages/Delegations';
 import Integrations from './pages/Integrations';
 import Conversations from './pages/Conversations';
 import Actions from './pages/Actions';
@@ -42,6 +45,9 @@ export default function App() {
           <Route path="decisions" element={<Decisions />} />
           <Route path="briefings" element={<Briefings />} />
           <Route path="files" element={<Files />} />
+          <Route path="money" element={<Money />} />
+          <Route path="deals" element={<Deals />} />
+          <Route path="delegations" element={<Delegations />} />
           <Route path="mercury" element={<Mercury />} />
           <Route path="integrations" element={<Integrations />} />
           <Route path="settings" element={<Settings />} />

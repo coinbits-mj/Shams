@@ -180,6 +180,38 @@ CREATE INDEX IF NOT EXISTS idx_actions_status ON shams_actions (status);
 CREATE INDEX IF NOT EXISTS idx_actions_agent ON shams_actions (agent_name, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_actions_created ON shams_actions (created_at DESC);
 
+CREATE TABLE IF NOT EXISTS shams_deals (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(500) NOT NULL,
+    deal_type       VARCHAR(50) DEFAULT 'acquisition',
+    stage           VARCHAR(30) NOT NULL DEFAULT 'lead'
+        CHECK (stage IN ('lead', 'researching', 'evaluating', 'loi', 'due_diligence', 'closing', 'closed', 'dead')),
+    value           NUMERIC DEFAULT 0,
+    contact         VARCHAR(255) DEFAULT '',
+    source          VARCHAR(100) DEFAULT '',
+    location        VARCHAR(255) DEFAULT '',
+    next_action     TEXT DEFAULT '',
+    deadline        DATE,
+    score           INTEGER DEFAULT 0,
+    notes           TEXT DEFAULT '',
+    assigned_agent  VARCHAR(50) DEFAULT 'scout',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_deals_stage ON shams_deals (stage);
+
+CREATE TABLE IF NOT EXISTS shams_alert_rules (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(255) NOT NULL,
+    metric          VARCHAR(100) NOT NULL,
+    condition       VARCHAR(10) NOT NULL DEFAULT '<',
+    threshold       NUMERIC NOT NULL,
+    message_template TEXT NOT NULL,
+    enabled         BOOLEAN DEFAULT TRUE,
+    last_triggered  TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS shams_scheduled_tasks (
     id              SERIAL PRIMARY KEY,
     name            VARCHAR(255) NOT NULL,

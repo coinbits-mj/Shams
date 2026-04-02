@@ -353,6 +353,41 @@ TOOLS = [
         },
     },
     {
+        "name": "create_deal",
+        "description": "Add a new deal/opportunity to the pipeline. Use when Scout finds an acquisition target, real estate listing, partnership opportunity, or any money-making prospect.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Deal title (e.g. 'Red House Roasters Acquisition')"},
+                "deal_type": {"type": "string", "enum": ["acquisition", "real_estate", "partnership", "investment", "vendor", "other"]},
+                "value": {"type": "number", "description": "Estimated deal value in dollars"},
+                "contact": {"type": "string", "description": "Key contact person"},
+                "source": {"type": "string", "description": "How we found this (Scout research, email, referral, etc.)"},
+                "location": {"type": "string", "description": "Physical location if applicable"},
+                "next_action": {"type": "string", "description": "Next step to take"},
+                "score": {"type": "integer", "description": "Opportunity score 1-10 (10 = best)"},
+                "notes": {"type": "string", "description": "Additional context"},
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "update_deal",
+        "description": "Update a deal's stage, score, next action, or other details. Use to advance deals through the pipeline.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "deal_id": {"type": "integer"},
+                "stage": {"type": "string", "enum": ["lead", "researching", "evaluating", "loi", "due_diligence", "closing", "closed", "dead"]},
+                "value": {"type": "number"},
+                "next_action": {"type": "string"},
+                "score": {"type": "integer"},
+                "notes": {"type": "string"},
+            },
+            "required": ["deal_id"],
+        },
+    },
+    {
         "name": "schedule_task",
         "description": "Create a recurring scheduled task. Use when Maher says 'every Monday...', 'from now on...', 'daily at 8am...', etc. Creates a persistent job that runs automatically on schedule.",
         "input_schema": {
@@ -768,6 +803,28 @@ def _execute_tool(name: str, input_data: dict) -> str:
             except Exception:
                 pass
             return f"Action #{action_id} proposed: {input_data['title']}. Waiting for Maher's approval (dashboard or Telegram)."
+
+        elif name == "create_deal":
+            deal_id = memory.create_deal(
+                title=input_data["title"],
+                deal_type=input_data.get("deal_type", "acquisition"),
+                value=input_data.get("value", 0),
+                contact=input_data.get("contact", ""),
+                source=input_data.get("source", ""),
+                location=input_data.get("location", ""),
+                next_action=input_data.get("next_action", ""),
+                score=input_data.get("score", 0),
+                notes=input_data.get("notes", ""),
+            )
+            memory.log_activity("scout", "deal_created", f"Deal #{deal_id}: {input_data['title']}")
+            memory.create_notification("deal_created", f"New deal: {input_data['title']}", input_data.get("source", ""), "deal", deal_id)
+            return f"Deal #{deal_id} added to pipeline: {input_data['title']}"
+
+        elif name == "update_deal":
+            kwargs = {k: v for k, v in input_data.items() if k != "deal_id"}
+            memory.update_deal(input_data["deal_id"], **kwargs)
+            memory.log_activity("shams", "deal_updated", f"Deal #{input_data['deal_id']} → {kwargs.get('stage', 'updated')}")
+            return f"Deal #{input_data['deal_id']} updated."
 
         elif name == "schedule_task":
             task_id = memory.create_scheduled_task(
