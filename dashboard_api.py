@@ -1051,6 +1051,18 @@ def approve_action(action_id):
     memory.update_action_status(action_id, "approved")
     memory.increment_trust(a["agent_name"], "total_approved")
     memory.log_activity(a["agent_name"], "action_approved", f"Action #{action_id} approved: {a['title']}")
+
+    # Check if this is a workflow step — resume workflow
+    payload = a.get("payload", {})
+    if isinstance(payload, str):
+        payload = json.loads(payload or "{}")
+    if payload.get("workflow_id"):
+        try:
+            from workflow_engine import resume_after_approval
+            resume_after_approval(action_id)
+        except Exception as e:
+            logger.error(f"Workflow resume failed: {e}")
+
     return jsonify({"ok": True})
 
 
@@ -1159,6 +1171,111 @@ def toggle_auto_approve(agent_name):
     memory.set_auto_approve(agent_name, enabled)
     memory.log_activity("shams", "trust_update",
         f"Auto-approve {'enabled' if enabled else 'disabled'} for {agent_name}")
+    return jsonify({"ok": True})
+
+
+# ── Scheduled Tasks ─────────────────────────────────────────────────────────
+
+@api.route("/scheduled-tasks", methods=["GET"])
+@require_auth
+def get_scheduled_tasks():
+    tasks = memory.get_scheduled_tasks()
+    result = []
+    for t in tasks:
+        d = dict(t)
+        for k in ("last_run_at", "created_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/scheduled-tasks/<int:task_id>", methods=["PATCH"])
+@require_auth
+def update_scheduled_task(task_id):
+    data = request.get_json(silent=True) or {}
+    memory.update_scheduled_task(task_id, **{k: v for k, v in data.items() if k in ("name", "cron_expression", "prompt", "enabled")})
+    if data.get("enabled") is False:
+        try:
+            from app import remove_dynamic_task
+            remove_dynamic_task(task_id)
+        except Exception:
+            pass
+    elif data.get("enabled") is True and data.get("cron_expression"):
+        try:
+            from app import register_dynamic_task
+            register_dynamic_task(task_id, data["cron_expression"], data.get("prompt", ""))
+        except Exception:
+            pass
+    return jsonify({"ok": True})
+
+
+@api.route("/scheduled-tasks/<int:task_id>", methods=["DELETE"])
+@require_auth
+def delete_scheduled_task(task_id):
+    memory.delete_scheduled_task(task_id)
+    try:
+        from app import remove_dynamic_task
+        remove_dynamic_task(task_id)
+    except Exception:
+        pass
+    return jsonify({"ok": True})
+
+
+@api.route("/scheduled-tasks/<int:task_id>/run", methods=["POST"])
+@require_auth
+def run_scheduled_task(task_id):
+    from app import _run_dynamic_task
+    _run_dynamic_task(task_id)
+    return jsonify({"ok": True})
+
+
+# ── Workflows ──────────────────────────────────────────────────────────────
+
+@api.route("/workflows", methods=["GET"])
+@require_auth
+def get_workflows():
+    status = request.args.get("status")
+    workflows = memory.get_workflows(status)
+    result = []
+    for w in workflows:
+        d = dict(w)
+        for k in ("created_at", "updated_at"):
+            if d.get(k):
+                d[k] = d[k].isoformat()
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/workflows/<int:workflow_id>", methods=["GET"])
+@require_auth
+def get_workflow(workflow_id):
+    wf = memory.get_workflow(workflow_id)
+    if not wf:
+        return jsonify({"error": "not found"}), 404
+    for k in ("created_at", "updated_at"):
+        if wf.get(k):
+            wf[k] = wf[k].isoformat()
+    for step in wf.get("steps", []):
+        for k in ("started_at", "completed_at"):
+            if step.get(k):
+                step[k] = step[k].isoformat()
+    return jsonify(wf)
+
+
+@api.route("/workflows/<int:workflow_id>/pause", methods=["POST"])
+@require_auth
+def pause_workflow(workflow_id):
+    memory.update_workflow_status(workflow_id, "paused")
+    return jsonify({"ok": True})
+
+
+@api.route("/workflows/<int:workflow_id>/resume", methods=["POST"])
+@require_auth
+def resume_workflow(workflow_id):
+    memory.update_workflow_status(workflow_id, "active")
+    from workflow_engine import run_next_step
+    run_next_step(workflow_id)
     return jsonify({"ok": True})
 
 

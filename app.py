@@ -37,6 +37,26 @@ TG_BASE = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}" if config.T
 TG_FILE_BASE = f"https://api.telegram.org/file/bot{config.TELEGRAM_BOT_TOKEN}" if config.TELEGRAM_BOT_TOKEN else ""
 
 
+_scheduler = None  # module-level reference for dynamic task registration
+
+
+def send_telegram_with_buttons(chat_id: str, text: str, buttons: list):
+    """Send a Telegram message with inline keyboard buttons."""
+    if not TG_BASE:
+        return
+    keyboard = {"inline_keyboard": [buttons]}
+    try:
+        r = requests.post(f"{TG_BASE}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": text,
+            "reply_markup": keyboard,
+        }, timeout=30)
+        if not r.ok:
+            logger.error(f"Telegram buttons send failed: {r.status_code}")
+    except Exception as e:
+        logger.error(f"Telegram buttons send failed: {e}")
+
+
 def send_telegram(chat_id: str, text: str):
     """Send a Telegram message. Auto-chunks at 4096 chars."""
     if not TG_BASE:
@@ -261,6 +281,15 @@ def telegram_polling():
             for update in data.get("result", []):
                 offset = update["update_id"] + 1
 
+                # Handle callback queries (inline button presses)
+                callback = update.get("callback_query")
+                if callback:
+                    try:
+                        _handle_callback(callback)
+                    except Exception as e:
+                        logger.error(f"Callback error: {e}", exc_info=True)
+                    continue
+
                 msg = update.get("message")
                 if not msg:
                     continue
@@ -340,6 +369,131 @@ def send_evening_briefing():
     except Exception as e:
         memory.log_activity("shams", "error", f"Evening briefing failed: {e}")
         logger.error(f"Evening briefing failed: {e}")
+
+
+# ── Telegram callback handler ───────────────────────────────────────────────
+
+def _handle_callback(callback):
+    """Handle inline button presses from Telegram."""
+    cb_data = callback.get("data", "")
+    cb_id = callback["id"]
+    chat_id = str(callback["message"]["chat"]["id"])
+
+    parts = cb_data.split(":")
+    if len(parts) != 2:
+        return
+
+    action_type, action_id_str = parts
+    try:
+        action_id = int(action_id_str)
+    except ValueError:
+        return
+
+    a = memory.get_action(action_id)
+    if not a or a["status"] != "pending":
+        requests.post(f"{TG_BASE}/answerCallbackQuery", json={
+            "callback_query_id": cb_id,
+            "text": f"Action already {a['status'] if a else 'not found'}",
+        }, timeout=10)
+        return
+
+    if action_type == "approve":
+        memory.update_action_status(action_id, "approved")
+        memory.increment_trust(a["agent_name"], "total_approved")
+        memory.log_activity(a["agent_name"], "action_approved", f"Action #{action_id} approved via Telegram")
+        memory.create_notification("action_approved", f"Approved: {a['title']}", "", "action", action_id)
+        requests.post(f"{TG_BASE}/answerCallbackQuery", json={
+            "callback_query_id": cb_id, "text": "Approved!",
+        }, timeout=10)
+        send_telegram(chat_id, f"Action #{action_id} approved: {a['title']}")
+
+        # Check if this is a workflow step — resume workflow
+        payload = a.get("payload", {})
+        if isinstance(payload, str):
+            import json as _json
+            payload = _json.loads(payload)
+        if payload.get("workflow_id"):
+            try:
+                from workflow_engine import resume_after_approval
+                resume_after_approval(action_id)
+            except Exception as e:
+                logger.error(f"Workflow resume failed: {e}")
+
+    elif action_type == "reject":
+        memory.update_action_status(action_id, "rejected")
+        memory.increment_trust(a["agent_name"], "total_rejected")
+        memory.log_activity(a["agent_name"], "action_rejected", f"Action #{action_id} rejected via Telegram")
+        requests.post(f"{TG_BASE}/answerCallbackQuery", json={
+            "callback_query_id": cb_id, "text": "Rejected.",
+        }, timeout=10)
+        send_telegram(chat_id, f"Action #{action_id} rejected: {a['title']}")
+
+
+# ── Dynamic scheduled tasks ────────────────────────────────────────────────
+
+def _run_dynamic_task(task_id: int):
+    """Execute a dynamic scheduled task."""
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM shams_scheduled_tasks WHERE id = %s AND enabled = TRUE", (task_id,))
+        task = cur.fetchone()
+    if not task:
+        return
+
+    try:
+        result = claude_client.chat(task["prompt"])
+        memory.mark_task_run(task_id, result)
+        memory.log_activity(task["agent_name"], "scheduled_task", f"Task #{task_id} ({task['name']}): {result[:100]}")
+
+        # Send result to Telegram
+        if config.TELEGRAM_CHAT_ID and result:
+            send_telegram(config.TELEGRAM_CHAT_ID, f"[Scheduled: {task['name']}]\n\n{result}")
+    except Exception as e:
+        logger.error(f"Scheduled task #{task_id} failed: {e}")
+        memory.mark_task_run(task_id, f"Error: {e}")
+
+
+def register_dynamic_task(task_id: int, cron_expression: str, prompt: str):
+    """Register a dynamic task with the live scheduler."""
+    global _scheduler
+    if not _scheduler:
+        return
+    parts = cron_expression.split()
+    if len(parts) != 5:
+        logger.error(f"Invalid cron expression for task #{task_id}: {cron_expression}")
+        return
+    _scheduler.add_job(
+        _run_dynamic_task, "cron",
+        args=[task_id],
+        id=f"dynamic_task_{task_id}",
+        minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4],
+        replace_existing=True,
+    )
+    logger.info(f"Registered dynamic task #{task_id}: {cron_expression}")
+
+
+def remove_dynamic_task(task_id: int):
+    """Remove a dynamic task from the live scheduler."""
+    global _scheduler
+    if not _scheduler:
+        return
+    try:
+        _scheduler.remove_job(f"dynamic_task_{task_id}")
+    except Exception:
+        pass
+
+
+def _load_dynamic_tasks():
+    """Load all enabled scheduled tasks from DB into APScheduler on startup."""
+    tasks = memory.get_scheduled_tasks(enabled_only=True)
+    for task in tasks:
+        try:
+            register_dynamic_task(task["id"], task["cron_expression"], task["prompt"])
+        except Exception as e:
+            logger.error(f"Failed to load task #{task['id']}: {e}")
+    if tasks:
+        logger.info(f"Loaded {len(tasks)} dynamic scheduled tasks")
 
 
 # ── Scheduled automation ────────────────────────────────────────────────────
@@ -497,7 +651,9 @@ if __name__ == "__main__":
     logger.info("Database tables ready")
 
     # Scheduler
+    global _scheduler
     scheduler = BackgroundScheduler()
+    _scheduler = scheduler
     scheduler.add_job(send_morning_briefing, "cron", hour=config.BRIEFING_HOUR_UTC, minute=0)
     scheduler.add_job(send_evening_briefing, "cron", hour=config.EVENING_HOUR_UTC, minute=0)
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
@@ -506,6 +662,9 @@ if __name__ == "__main__":
     scheduler.start()
     logger.info(f"Scheduler started — morning @ {config.BRIEFING_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
     logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily)")
+
+    # Load dynamic tasks from database
+    _load_dynamic_tasks()
 
     # Telegram polling in background thread
     if config.TELEGRAM_BOT_TOKEN:

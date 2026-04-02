@@ -180,6 +180,48 @@ CREATE INDEX IF NOT EXISTS idx_actions_status ON shams_actions (status);
 CREATE INDEX IF NOT EXISTS idx_actions_agent ON shams_actions (agent_name, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_actions_created ON shams_actions (created_at DESC);
 
+CREATE TABLE IF NOT EXISTS shams_scheduled_tasks (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(255) NOT NULL,
+    cron_expression VARCHAR(100) NOT NULL,
+    prompt          TEXT NOT NULL,
+    agent_name      VARCHAR(50) DEFAULT 'shams',
+    enabled         BOOLEAN DEFAULT TRUE,
+    last_run_at     TIMESTAMPTZ,
+    last_result     TEXT DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shams_workflows (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(500) NOT NULL,
+    description     TEXT DEFAULT '',
+    status          VARCHAR(20) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paused', 'completed', 'failed')),
+    current_step    INTEGER DEFAULT 1,
+    mission_id      INTEGER REFERENCES shams_missions(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS shams_workflow_steps (
+    id              SERIAL PRIMARY KEY,
+    workflow_id     INTEGER NOT NULL REFERENCES shams_workflows(id),
+    step_number     INTEGER NOT NULL,
+    agent_name      VARCHAR(50) NOT NULL,
+    instruction     TEXT NOT NULL,
+    requires_approval BOOLEAN DEFAULT FALSE,
+    status          VARCHAR(20) DEFAULT 'pending'
+        CHECK (status IN ('pending', 'active', 'completed', 'skipped', 'failed')),
+    input_context   TEXT DEFAULT '',
+    output_result   TEXT DEFAULT '',
+    action_id       INTEGER REFERENCES shams_actions(id),
+    started_at      TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    UNIQUE (workflow_id, step_number)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON shams_workflow_steps (workflow_id, step_number);
+
 CREATE TABLE IF NOT EXISTS shams_trust_scores (
     id              SERIAL PRIMARY KEY,
     agent_name      VARCHAR(50) NOT NULL UNIQUE,

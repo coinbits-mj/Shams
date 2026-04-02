@@ -496,6 +496,158 @@ def update_action_status(action_id: int, status: str, result: str = ""):
             )
 
 
+# ── Scheduled Tasks ─────────────────────────────────────────────────────────
+
+def create_scheduled_task(name: str, cron_expression: str, prompt: str,
+                          agent_name: str = "shams") -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}scheduled_tasks (name, cron_expression, prompt, agent_name) "
+            f"VALUES (%s, %s, %s, %s) RETURNING id",
+            (name, cron_expression, prompt, agent_name),
+        )
+        return cur.fetchone()[0]
+
+
+def get_scheduled_tasks(enabled_only: bool = False) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if enabled_only:
+            cur.execute(f"SELECT * FROM {P}scheduled_tasks WHERE enabled = TRUE ORDER BY created_at")
+        else:
+            cur.execute(f"SELECT * FROM {P}scheduled_tasks ORDER BY created_at")
+        return cur.fetchall()
+
+
+def update_scheduled_task(task_id: int, **kwargs):
+    with _conn() as conn, conn.cursor() as cur:
+        sets, params = [], []
+        for k, v in kwargs.items():
+            if k in ("name", "cron_expression", "prompt", "agent_name", "enabled"):
+                sets.append(f"{k} = %s")
+                params.append(v)
+        if not sets:
+            return
+        params.append(task_id)
+        cur.execute(f"UPDATE {P}scheduled_tasks SET {', '.join(sets)} WHERE id = %s", params)
+
+
+def delete_scheduled_task(task_id: int):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {P}scheduled_tasks WHERE id = %s", (task_id,))
+
+
+def mark_task_run(task_id: int, result: str):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}scheduled_tasks SET last_run_at = NOW(), last_result = %s WHERE id = %s",
+            (result[:2000], task_id),
+        )
+
+
+# ── Workflows ──────────────────────────────────────────────────────────────
+
+def create_workflow(title: str, description: str, steps: list[dict],
+                    mission_id: int | None = None) -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}workflows (title, description, mission_id) "
+            f"VALUES (%s, %s, %s) RETURNING id",
+            (title, description, mission_id),
+        )
+        workflow_id = cur.fetchone()[0]
+        for i, step in enumerate(steps, 1):
+            cur.execute(
+                f"INSERT INTO {P}workflow_steps (workflow_id, step_number, agent_name, instruction, requires_approval) "
+                f"VALUES (%s, %s, %s, %s, %s)",
+                (workflow_id, i, step["agent_name"], step["instruction"],
+                 step.get("requires_approval", False)),
+            )
+        return workflow_id
+
+
+def get_workflow(workflow_id: int) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}workflows WHERE id = %s", (workflow_id,))
+        wf = cur.fetchone()
+        if not wf:
+            return None
+        cur.execute(
+            f"SELECT * FROM {P}workflow_steps WHERE workflow_id = %s ORDER BY step_number",
+            (workflow_id,)
+        )
+        wf = dict(wf)
+        wf["steps"] = [dict(s) for s in cur.fetchall()]
+        return wf
+
+
+def get_workflows(status: str | None = None) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if status:
+            cur.execute(f"SELECT * FROM {P}workflows WHERE status = %s ORDER BY created_at DESC", (status,))
+        else:
+            cur.execute(f"SELECT * FROM {P}workflows ORDER BY created_at DESC LIMIT 50")
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_active_workflow_step(workflow_id: int) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}workflow_steps WHERE workflow_id = %s AND status = 'pending' "
+            f"ORDER BY step_number LIMIT 1", (workflow_id,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def advance_workflow_step(workflow_id: int, step_number: int, result: str):
+    with _conn() as conn, conn.cursor() as cur:
+        # Mark current step complete
+        cur.execute(
+            f"UPDATE {P}workflow_steps SET status = 'completed', output_result = %s, completed_at = NOW() "
+            f"WHERE workflow_id = %s AND step_number = %s",
+            (result, workflow_id, step_number),
+        )
+        # Set next step's input_context to this result
+        cur.execute(
+            f"UPDATE {P}workflow_steps SET input_context = %s "
+            f"WHERE workflow_id = %s AND step_number = %s",
+            (result, workflow_id, step_number + 1),
+        )
+        # Update workflow current_step
+        cur.execute(
+            f"UPDATE {P}workflows SET current_step = %s, updated_at = NOW() WHERE id = %s",
+            (step_number + 1, workflow_id),
+        )
+        # Check if there are more steps
+        cur.execute(
+            f"SELECT COUNT(*) FROM {P}workflow_steps WHERE workflow_id = %s AND step_number > %s",
+            (workflow_id, step_number),
+        )
+        remaining = cur.fetchone()[0]
+        if remaining == 0:
+            cur.execute(
+                f"UPDATE {P}workflows SET status = 'completed', updated_at = NOW() WHERE id = %s",
+                (workflow_id,),
+            )
+
+
+def update_workflow_status(workflow_id: int, status: str):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}workflows SET status = %s, updated_at = NOW() WHERE id = %s",
+            (status, workflow_id),
+        )
+
+
+def start_workflow_step(workflow_id: int, step_number: int):
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}workflow_steps SET status = 'active', started_at = NOW() "
+            f"WHERE workflow_id = %s AND step_number = %s",
+            (workflow_id, step_number),
+        )
+
+
 # ── Action Helpers ──────────────────────────────────────────────────────────
 
 def get_actions_for_mission(mission_id: int) -> list[dict]:

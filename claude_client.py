@@ -353,6 +353,72 @@ TOOLS = [
         },
     },
     {
+        "name": "schedule_task",
+        "description": "Create a recurring scheduled task. Use when Maher says 'every Monday...', 'from now on...', 'daily at 8am...', etc. Creates a persistent job that runs automatically on schedule.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short name for this task"},
+                "cron_expression": {"type": "string", "description": "Cron expression in UTC (e.g. '0 14 * * 1' for Monday 9am ET / 2pm UTC, '0 12 * * 1-5' for weekdays 7am ET)"},
+                "prompt": {"type": "string", "description": "The instruction to execute each run"},
+            },
+            "required": ["name", "cron_expression", "prompt"],
+        },
+    },
+    {
+        "name": "list_scheduled_tasks",
+        "description": "List all scheduled recurring tasks.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cancel_scheduled_task",
+        "description": "Cancel/disable a scheduled task by ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "integer", "description": "ID of the task to cancel"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "create_workflow",
+        "description": "Create a multi-step workflow that chains agents together. Each step runs in sequence — the output of one step feeds into the next agent. Use for complex requests needing multiple agents (e.g. research → draft → review).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Workflow title"},
+                "description": {"type": "string", "description": "What this workflow accomplishes"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "agent_name": {"type": "string", "enum": ["shams", "rumi", "leo", "wakil", "scout", "builder"]},
+                            "instruction": {"type": "string", "description": "What this agent should do in this step"},
+                            "requires_approval": {"type": "boolean", "default": false},
+                        },
+                        "required": ["agent_name", "instruction"],
+                    },
+                },
+            },
+            "required": ["title", "steps"],
+        },
+    },
+    {
+        "name": "route_to_agent",
+        "description": "Send a message to a specific agent with optional context from a previous action. The agent responds with their expertise. Use to delegate work or get a specialist's input.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_agent": {"type": "string", "enum": ["shams", "rumi", "leo", "wakil", "scout", "builder"]},
+                "message": {"type": "string", "description": "What you need from this agent"},
+                "context_from_action_id": {"type": "integer", "description": "Optional: action ID whose result to include as context"},
+            },
+            "required": ["target_agent", "message"],
+        },
+    },
+    {
         "name": "remember",
         "description": "Save a piece of information to persistent memory. Use this when Maher tells you something important to remember, or when you learn something that should persist across conversations.",
         "input_schema": {
@@ -688,7 +754,94 @@ def _execute_tool(name: str, input_data: dict) -> str:
                 return f"Action #{action_id} auto-approved: {input_data['title']}"
             memory.log_activity("shams", "action_proposed", f"Action #{action_id}: {input_data['title']}")
             memory.create_notification("action_pending", input_data["title"], "", "action", action_id)
-            return f"Action #{action_id} proposed: {input_data['title']}. Waiting for Maher's approval in the dashboard."
+            # Send Telegram with approve/reject buttons
+            try:
+                import config as _cfg
+                if _cfg.TELEGRAM_CHAT_ID:
+                    from app import send_telegram_with_buttons
+                    send_telegram_with_buttons(_cfg.TELEGRAM_CHAT_ID,
+                        f"Action #{action_id}: {input_data['title']}\n{input_data.get('description', '')}",
+                        [
+                            {"text": "Approve", "callback_data": f"approve:{action_id}"},
+                            {"text": "Reject", "callback_data": f"reject:{action_id}"},
+                        ])
+            except Exception:
+                pass
+            return f"Action #{action_id} proposed: {input_data['title']}. Waiting for Maher's approval (dashboard or Telegram)."
+
+        elif name == "schedule_task":
+            task_id = memory.create_scheduled_task(
+                name=input_data["name"],
+                cron_expression=input_data["cron_expression"],
+                prompt=input_data["prompt"],
+            )
+            # Register with live scheduler
+            try:
+                from app import register_dynamic_task
+                register_dynamic_task(task_id, input_data["cron_expression"], input_data["prompt"])
+            except Exception as e:
+                logger.warning(f"Could not register task live (will load on restart): {e}")
+            memory.log_activity("shams", "task_scheduled",
+                f"Scheduled task #{task_id}: {input_data['name']} ({input_data['cron_expression']})")
+            memory.create_notification("task_scheduled", f"Recurring task created: {input_data['name']}", input_data["cron_expression"], "", None)
+            return f"Scheduled task #{task_id} created: {input_data['name']}\nSchedule: {input_data['cron_expression']}\nPrompt: {input_data['prompt']}"
+
+        elif name == "list_scheduled_tasks":
+            tasks = memory.get_scheduled_tasks()
+            if not tasks:
+                return "No scheduled tasks."
+            lines = []
+            for t in tasks:
+                status = "enabled" if t["enabled"] else "disabled"
+                last = t["last_run_at"].isoformat() if t.get("last_run_at") else "never"
+                lines.append(f"#{t['id']}: {t['name']} [{status}] — cron: {t['cron_expression']} — last run: {last}")
+            return "\n".join(lines)
+
+        elif name == "cancel_scheduled_task":
+            memory.update_scheduled_task(input_data["task_id"], enabled=False)
+            try:
+                from app import remove_dynamic_task
+                remove_dynamic_task(input_data["task_id"])
+            except Exception:
+                pass
+            return f"Scheduled task #{input_data['task_id']} disabled."
+
+        elif name == "create_workflow":
+            workflow_id = memory.create_workflow(
+                title=input_data["title"],
+                description=input_data.get("description", ""),
+                steps=input_data["steps"],
+            )
+            step_list = "\n".join(
+                f"  {i+1}. {s['agent_name']}: {s['instruction'][:80]}"
+                for i, s in enumerate(input_data["steps"])
+            )
+            memory.log_activity("shams", "workflow_created",
+                f"Workflow #{workflow_id}: {input_data['title']} ({len(input_data['steps'])} steps)")
+            memory.create_notification("workflow_created", f"Workflow: {input_data['title']}", f"{len(input_data['steps'])} steps", "workflow", workflow_id)
+            # Start first step
+            try:
+                from workflow_engine import run_next_step
+                run_next_step(workflow_id)
+            except Exception as e:
+                logger.warning(f"Could not auto-start workflow: {e}")
+            return f"Workflow #{workflow_id} created: {input_data['title']}\nSteps:\n{step_list}\n\nStep 1 is starting now."
+
+        elif name == "route_to_agent":
+            from agents.registry import call_agent
+            extra = ""
+            if input_data.get("context_from_action_id"):
+                action = memory.get_action(input_data["context_from_action_id"])
+                if action:
+                    extra = f"Context from previous action #{action['id']}:\n{action.get('result', '')}"
+            response = call_agent(
+                input_data["target_agent"],
+                input_data["message"],
+                extra_context=extra,
+            )
+            memory.log_activity(input_data["target_agent"], "routed_message",
+                f"Message from Shams: {input_data['message'][:80]}")
+            return f"[{input_data['target_agent']}]: {response}"
 
         elif name == "remember":
             memory.remember(input_data["key"], input_data["value"])
