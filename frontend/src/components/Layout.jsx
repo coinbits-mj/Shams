@@ -1,10 +1,11 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug, ShieldCheck, Inbox, Settings } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, Landmark, History, Plug, ShieldCheck, Inbox, Settings, Zap } from 'lucide-react';
 import { useNotifications } from './ToastProvider';
 
 const nav = [
-  { to: '/', label: 'mission control', icon: LayoutGrid, end: true },
+  { to: '/', label: 'today', icon: Zap, end: true },
+  { to: '/missions', label: 'missions', icon: LayoutGrid },
   { to: '/actions', label: 'actions', icon: ShieldCheck, badgeKey: 'actions_pending' },
   { to: '/inbox', label: 'inbox', icon: Inbox, badgeKey: 'inbox_p1p2' },
   { to: '/war-room', label: 'war room', icon: Users },

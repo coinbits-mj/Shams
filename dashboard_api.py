@@ -123,6 +123,122 @@ def logout():
     return jsonify({"ok": True})
 
 
+# ── Today (Daily Standup) ────────────────────────────────────────────────────
+
+@api.route("/today", methods=["GET"])
+@require_auth
+def get_today():
+    """Single endpoint that aggregates everything MJ needs to see right now."""
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    result = {}
+
+    # Cash position
+    try:
+        import mercury_client
+        balances = mercury_client.get_balances()
+        result["cash"] = balances if balances else {}
+    except Exception:
+        result["cash"] = {}
+
+    # P&L (yesterday + MTD)
+    try:
+        daily = rumi_client.get_daily_pl("yesterday")
+        monthly = rumi_client.get_monthly_pl()
+        result["pl"] = {"daily": daily or {}, "monthly": monthly or {}}
+    except Exception:
+        result["pl"] = {"daily": {}, "monthly": {}}
+
+    # Pending actions
+    try:
+        actions = memory.get_actions(status="pending", limit=10)
+        result["pending_actions"] = [{
+            "id": a["id"], "agent_name": a["agent_name"], "title": a["title"],
+            "action_type": a["action_type"],
+            "created_at": a["created_at"].isoformat() if a.get("created_at") else "",
+        } for a in actions]
+    except Exception:
+        result["pending_actions"] = []
+
+    # Missions needing attention (review + active)
+    try:
+        with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, title, status, priority, assigned_agent, updated_at "
+                "FROM shams_missions WHERE status IN ('review', 'active', 'assigned') "
+                "ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END, "
+                "updated_at DESC LIMIT 15"
+            )
+            missions = cur.fetchall()
+        result["missions"] = [{
+            **{k: (v.isoformat() if hasattr(v, 'isoformat') else v) for k, v in dict(m).items()}
+        } for m in missions]
+    except Exception:
+        result["missions"] = []
+
+    # P1/P2 emails
+    try:
+        emails = memory.get_triaged_emails(archived=False, limit=50)
+        urgent = [e for e in emails if e.get("priority") in ("P1", "P2")]
+        result["urgent_emails"] = [{
+            "id": e["id"], "priority": e["priority"], "subject": e["subject"],
+            "from_addr": e["from_addr"], "account": e["account"],
+            "action": e.get("action", ""), "routed_to": e.get("routed_to", []),
+            "triaged_at": e["triaged_at"].isoformat() if e.get("triaged_at") else "",
+        } for e in urgent[:10]]
+    except Exception:
+        result["urgent_emails"] = []
+
+    # Active workflows
+    try:
+        workflows = memory.get_workflows(status="active")
+        result["workflows"] = [{
+            "id": w["id"], "title": w["title"], "current_step": w.get("current_step", 1),
+            "created_at": w["created_at"].isoformat() if w.get("created_at") else "",
+        } for w in workflows[:5]]
+    except Exception:
+        result["workflows"] = []
+
+    # Health summary
+    try:
+        import leo_client
+        health = leo_client.get_health_summary()
+        if health:
+            user = health.get("user") or {}
+            daily = health.get("daily_summary") or {}
+            result["health"] = {
+                "weight": user.get("current_weight"),
+                "sleep": daily.get("sleep_hours"),
+                "hrv": daily.get("hrv"),
+                "streak": user.get("current_streak"),
+                "calories": daily.get("calories"),
+                "steps": daily.get("steps"),
+            }
+        else:
+            result["health"] = {}
+    except Exception:
+        result["health"] = {}
+
+    # Notification counts
+    try:
+        result["counts"] = memory.get_notification_counts()
+    except Exception:
+        result["counts"] = {}
+
+    # Recent activity (last 5 important events)
+    try:
+        feed = memory.get_activity_feed(limit=10)
+        result["recent_activity"] = [{
+            "agent_name": f["agent_name"], "event_type": f["event_type"],
+            "content": f["content"],
+            "timestamp": f["timestamp"].isoformat() if f.get("timestamp") else "",
+        } for f in feed[:5]]
+    except Exception:
+        result["recent_activity"] = []
+
+    return jsonify(result)
+
+
 # ── Chat ─────────────────────────────────────────────────────────────────────
 
 def _process_uploaded_files(req) -> tuple:
