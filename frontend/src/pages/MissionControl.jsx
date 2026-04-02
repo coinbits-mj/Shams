@@ -21,7 +21,6 @@ export default function MissionControl() {
   const [selectedMission, setSelectedMission] = useState(null);
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [previewFileId, setPreviewFileId] = useState(null);
-  const [sidebarTab, setSidebarTab] = useState('chat');
   const [chatMessages, setChatMessages] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef(null);
@@ -192,105 +191,89 @@ export default function MissionControl() {
         </div>
       </div>
 
-      {/* Right sidebar — Chat + Feed tabs */}
-      <div className="w-96 border-l border-[var(--border)] bg-[var(--bg-surface)] flex flex-col">
-        {/* Tab bar */}
-        <div className="flex border-b border-[var(--border)]">
-          <button onClick={() => setSidebarTab('chat')}
-            className={`flex-1 px-4 py-3 text-xs mono-heading transition-colors flex items-center justify-center gap-2 ${
-              sidebarTab === 'chat' ? 'text-[var(--amber)] border-b-2 border-[var(--amber)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-            }`}>
-            <MessageSquare size={12} /> shams
-          </button>
-          <button onClick={() => setSidebarTab('feed')}
-            className={`flex-1 px-4 py-3 text-xs mono-heading transition-colors flex items-center justify-center gap-2 ${
-              sidebarTab === 'feed' ? 'text-[var(--accent)] border-b-2 border-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-            }`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${sidebarTab === 'feed' ? 'bg-[var(--green)] pulse-active' : 'bg-[var(--text-muted)]'}`} />
-            live feed
-          </button>
+      {/* Live Feed column */}
+      <div className="w-72 border-l border-[var(--border)] bg-[var(--bg-surface)] flex flex-col">
+        <div className="px-3 py-3 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--green)] pulse-active" />
+            <span className="mono-heading text-xs text-[var(--text-primary)]">live feed</span>
+          </div>
+          <div className="flex gap-1 flex-wrap">
+            {['', 'tool_call', 'action_proposed', 'mission_update', 'group_chat', 'error'].map(t => (
+              <button key={t} onClick={() => setFeedType(t)}
+                className={`text-[10px] px-1.5 py-0.5 rounded mono-heading transition-colors ${
+                  feedType === t ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                }`}>
+                {t || 'all'}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1 mt-1 flex-wrap">
+            <button onClick={() => setFeedAgent('')}
+              className={`text-[10px] px-1.5 py-0.5 rounded mono-heading ${!feedAgent ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>all</button>
+            {agents.map(a => (
+              <button key={a.name} onClick={() => setFeedAgent(a.name)}
+                className={`text-[10px] px-1.5 py-0.5 rounded mono-heading ${feedAgent === a.name ? 'bg-[var(--accent-glow)]' : ''}`}
+                style={{ color: feedAgent === a.name ? (a.config?.color || '#f59e0b') : undefined }}>
+                {a.name}
+              </button>
+            ))}
+          </div>
         </div>
-
-        {/* Chat tab */}
-        {sidebarTab === 'chat' && (
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {chatMessages.map((m, i) => (
-                <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[90%] rounded-lg px-3 py-2 text-xs whitespace-pre-wrap ${
-                    m.role === 'user'
-                      ? 'bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)]'
-                      : 'bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)]'
-                  }`}>
-                    <SmartMessage content={m.content} />
-                  </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+          {feed.map((f, i) => {
+            const agentColor = agents.find(a => a.name === f.agent_name)?.config?.color || '#64748b';
+            return (
+              <div key={i} className="p-2 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="mono-heading text-[11px] font-medium" style={{ color: agentColor }}>{f.agent_name}</span>
+                  <span className="text-[10px] text-[var(--text-muted)]">
+                    {f.timestamp ? new Date(f.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                  </span>
                 </div>
-              ))}
-              {chatLoading && (
-                <div className="flex justify-start">
-                  <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-muted)]">
-                    <span className="pulse-active inline-block">thinking...</span>
-                  </div>
-                </div>
-              )}
-              <div ref={chatBottomRef} />
-            </div>
-            <ChatInput
-              ref={chatInputRef}
-              onSend={handleChatSend}
-              placeholder="message shams... (/ for commands)"
-              disabled={chatLoading}
-            />
-          </div>
-        )}
-
-        {/* Feed tab */}
-        {sidebarTab === 'feed' && (
-          <div className="flex-1 flex flex-col min-h-0">
-            <div className="px-3 py-2 border-b border-[var(--border)]">
-              <div className="flex gap-1 flex-wrap">
-                {['', 'tool_call', 'action_proposed', 'action_approved', 'mission_update', 'group_chat', 'briefing', 'error'].map(t => (
-                  <button key={t} onClick={() => setFeedType(t)}
-                    className={`text-[10px] px-1.5 py-0.5 rounded mono-heading transition-colors ${
-                      feedType === t ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                    }`}>
-                    {t || 'all'}
-                  </button>
-                ))}
+                <p className="text-[11px] text-[var(--text-secondary)] leading-tight"><SmartMessage content={f.content} /></p>
               </div>
-              <div className="flex gap-1 mt-1 flex-wrap">
-                <button onClick={() => setFeedAgent('')}
-                  className={`text-[10px] px-1.5 py-0.5 rounded mono-heading ${!feedAgent ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>all</button>
-                {agents.map(a => (
-                  <button key={a.name} onClick={() => setFeedAgent(a.name)}
-                    className={`text-[10px] px-1.5 py-0.5 rounded mono-heading ${feedAgent === a.name ? 'bg-[var(--accent-glow)]' : ''}`}
-                    style={{ color: feedAgent === a.name ? (a.config?.color || '#f59e0b') : undefined }}>
-                    {a.name}
-                  </button>
-                ))}
+            );
+          })}
+          {feed.length === 0 && (
+            <p className="text-[11px] text-[var(--text-muted)] text-center py-8">no activity yet</p>
+          )}
+        </div>
+      </div>
+
+      {/* Shams Chat column */}
+      <div className="w-80 border-l border-[var(--border)] bg-[var(--bg-surface)] flex flex-col">
+        <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
+          <MessageSquare size={12} className="text-[var(--amber)]" />
+          <span className="mono-heading text-xs text-[var(--amber)]">shams</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
+          {chatMessages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[90%] rounded-lg px-3 py-2 text-xs whitespace-pre-wrap ${
+                m.role === 'user'
+                  ? 'bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)]'
+                  : 'bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)]'
+              }`}>
+                <SmartMessage content={m.content} />
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {feed.map((f, i) => {
-                const agentColor = agents.find(a => a.name === f.agent_name)?.config?.color || '#64748b';
-                return (
-                  <div key={i} className="p-2.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border)]">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="mono-heading text-xs font-medium" style={{ color: agentColor }}>{f.agent_name}</span>
-                      <span className="text-[10px] text-[var(--text-muted)]">
-                        {f.timestamp ? new Date(f.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
-                      </span>
-                    </div>
-                    <p className="text-xs text-[var(--text-secondary)]"><SmartMessage content={f.content} /></p>
-                  </div>
-                );
-              })}
-              {feed.length === 0 && (
-                <p className="text-xs text-[var(--text-muted)] text-center py-8">no activity yet</p>
-              )}
+          ))}
+          {chatLoading && (
+            <div className="flex justify-start">
+              <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-muted)]">
+                <span className="pulse-active inline-block">thinking...</span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
+          <div ref={chatBottomRef} />
+        </div>
+        <ChatInput
+          ref={chatInputRef}
+          onSend={handleChatSend}
+          placeholder="message shams... (/ for commands)"
+          disabled={chatLoading}
+        />
       </div>
 
       {/* Agent detail modal */}
