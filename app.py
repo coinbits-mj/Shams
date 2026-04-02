@@ -37,7 +37,7 @@ TG_BASE = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}" if config.T
 TG_FILE_BASE = f"https://api.telegram.org/file/bot{config.TELEGRAM_BOT_TOKEN}" if config.TELEGRAM_BOT_TOKEN else ""
 
 
-_scheduler = None  # module-level reference for dynamic task registration
+_scheduler_ref = {"instance": None}  # module-level reference for dynamic task registration
 
 
 def send_telegram_with_buttons(chat_id: str, text: str, buttons: list):
@@ -456,7 +456,7 @@ def _run_dynamic_task(task_id: int):
 
 def register_dynamic_task(task_id: int, cron_expression: str, prompt: str):
     """Register a dynamic task with the live scheduler."""
-    global _scheduler
+    _scheduler = _scheduler_ref["instance"]
     if not _scheduler:
         return
     parts = cron_expression.split()
@@ -475,7 +475,7 @@ def register_dynamic_task(task_id: int, cron_expression: str, prompt: str):
 
 def remove_dynamic_task(task_id: int):
     """Remove a dynamic task from the live scheduler."""
-    global _scheduler
+    _scheduler = _scheduler_ref["instance"]
     if not _scheduler:
         return
     try:
@@ -651,9 +651,8 @@ if __name__ == "__main__":
     logger.info("Database tables ready")
 
     # Scheduler
-    global _scheduler
     scheduler = BackgroundScheduler()
-    _scheduler = scheduler
+    _scheduler_ref["instance"] = scheduler
     scheduler.add_job(send_morning_briefing, "cron", hour=config.BRIEFING_HOUR_UTC, minute=0)
     scheduler.add_job(send_evening_briefing, "cron", hour=config.EVENING_HOUR_UTC, minute=0)
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
