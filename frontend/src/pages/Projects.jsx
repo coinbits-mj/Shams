@@ -1,163 +1,191 @@
-import { useState, useEffect } from 'react';
-import { get, patch } from '../api';
-import { ChevronDown, ChevronRight, Circle, CheckCircle, Clock, AlertTriangle, Lock, ArrowLeft, X } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { get, patch, post, upload } from '../api';
+import { ChevronDown, ChevronRight, Circle, CheckCircle, Clock, AlertTriangle, Lock, X, FileText, Paperclip, Image } from 'lucide-react';
+import SmartMessage from '../components/SmartMessage';
+import FilePreviewModal from '../components/FilePreviewModal';
+import ChatInput from '../components/ChatInput';
 
 const agentColors = {
   shams: '#f59e0b', rumi: '#06b6d4', leo: '#22c55e',
   wakil: '#a855f7', scout: '#ef4444', builder: '#3b82f6',
 };
-const statusIcons = {
-  inbox: Circle, assigned: Clock, active: Clock, review: AlertTriangle, done: CheckCircle, dropped: Circle,
-};
 const priorityColors = { urgent: '#ef4444', high: '#f97316', normal: '#38bdf8', low: '#64748b' };
+const kanbanColumns = ['inbox', 'assigned', 'active', 'review', 'done'];
+const kanbanLabels = { inbox: 'Inbox', assigned: 'Assigned', active: 'Active', review: 'Review', done: 'Done' };
 
 export default function Projects() {
   const [projects, setProjects] = useState([]);
-  const [expandedBrief, setExpandedBrief] = useState(null);
-  const [activeProject, setActiveProject] = useState(null); // drilled-in project kanban
+  const [activeProject, setActiveProject] = useState(null);
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [taskDetail, setTaskDetail] = useState(null);
+  const [previewFileId, setPreviewFileId] = useState(null);
+
+  // Chat state for task-level conversation
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatBottomRef = useRef(null);
 
   async function loadProjects() {
     const d = await get('/gantt');
-    if (d) setProjects(d);
+    if (d) {
+      setProjects(d);
+      // Refresh active project if one is selected
+      if (activeProject) {
+        const updated = d.find(p => p.id === activeProject.id);
+        if (updated) setActiveProject(updated);
+      }
+    }
   }
 
   useEffect(() => { loadProjects(); }, []);
 
+  // Load task detail when selected
+  useEffect(() => {
+    if (!selectedTask) { setTaskDetail(null); return; }
+    get(`/missions/${selectedTask.id}`).then(d => {
+      if (d) setTaskDetail(d);
+    });
+  }, [selectedTask?.id]);
+
+  // Auto-scroll chat
+  useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
   async function moveMission(missionId, newStatus) {
     await patch(`/missions/${missionId}`, { status: newStatus });
     loadProjects();
-    // Refresh active project
-    if (activeProject) {
-      const updated = await get(`/projects/${activeProject.id}`);
-      if (updated) setActiveProject({ ...activeProject, tasks: updated.missions?.map(m => ({
-        ...m, assigned_agent: m.assigned_agent, depends_on: m.depends_on || [],
-      })) || [] });
+    if (taskDetail?.id === missionId) {
+      const d = await get(`/missions/${missionId}`);
+      if (d) setTaskDetail(d);
     }
   }
 
-  // Calculate timeline bounds
-  let minDate = new Date();
-  let maxDate = new Date();
-  minDate.setDate(minDate.getDate() - 7);
-  maxDate.setMonth(maxDate.getMonth() + 3);
-
-  projects.forEach(p => {
-    if (p.start_date) { const d = new Date(p.start_date); if (d < minDate) minDate = d; }
-    if (p.target_date) { const d = new Date(p.target_date); if (d > maxDate) maxDate = d; }
-    p.tasks?.forEach(t => {
-      if (t.start_date) { const d = new Date(t.start_date); if (d < minDate) minDate = d; }
-      if (t.end_date) { const d = new Date(t.end_date); if (d > maxDate) maxDate = d; }
-    });
-  });
-
-  const totalDays = Math.max(Math.ceil((maxDate - minDate) / (1000 * 60 * 60 * 24)), 30);
-  const today = new Date();
-  const todayOffset = Math.ceil((today - minDate) / (1000 * 60 * 60 * 24));
-
-  function getBarStyle(startStr, endStr, color) {
-    if (!startStr) return null;
-    const start = new Date(startStr);
-    const end = endStr ? new Date(endStr) : new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const left = Math.max(0, (start - minDate) / (1000 * 60 * 60 * 24));
-    const width = Math.max(1, (end - start) / (1000 * 60 * 60 * 24));
-    return {
-      left: `${(left / totalDays) * 100}%`,
-      width: `${(width / totalDays) * 100}%`,
-      backgroundColor: `${color}30`,
-      borderLeft: `3px solid ${color}`,
-    };
-  }
-
-  // Generate month markers
-  const months = [];
-  const cursor = new Date(minDate);
-  cursor.setDate(1);
-  while (cursor <= maxDate) {
-    const offset = (cursor - minDate) / (1000 * 60 * 60 * 24);
-    if (offset >= 0) {
-      months.push({
-        label: cursor.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-        left: `${(offset / totalDays) * 100}%`,
-      });
+  async function handleTaskChat(message, files) {
+    if (!message && files.length === 0) return;
+    const taskContext = taskDetail ? `[Context: working on "${taskDetail.title}" for project "${activeProject?.title}"]` : '';
+    const fullMessage = `${taskContext}\n\n${message}`;
+    setChatMessages(prev => [...prev, { role: 'user', content: message }]);
+    setChatLoading(true);
+    let data;
+    if (files.length > 0) {
+      data = await upload('/chat', fullMessage, files);
+    } else {
+      data = await post('/chat', { message: fullMessage });
     }
-    cursor.setMonth(cursor.getMonth() + 1);
+    if (data?.reply) setChatMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
+    setChatLoading(false);
   }
 
-  const kanbanColumns = ['inbox', 'assigned', 'active', 'review', 'done'];
-  const kanbanLabels = { inbox: 'Inbox', assigned: 'Assigned', active: 'Active', review: 'Review', done: 'Done' };
+  // ─── PANE 1: Project List ────────────────────────────────────────
+  function renderProjectList() {
+    return (
+      <div className="w-56 flex-shrink-0 border-r border-[var(--border)] bg-[var(--bg-surface)] flex flex-col h-full">
+        <div className="p-3 border-b border-[var(--border)]">
+          <span className="mono-heading text-sm text-[var(--text-primary)]">projects</span>
+        </div>
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {projects.map(p => (
+            <button key={p.id} onClick={() => { setActiveProject(p); setSelectedTask(null); setChatMessages([]); }}
+              className={`w-full text-left p-2.5 rounded-lg transition-colors ${
+                activeProject?.id === p.id
+                  ? 'bg-[var(--accent-glow)] border border-[var(--border-bright)]'
+                  : 'hover:bg-[var(--bg-hover)]'
+              }`}>
+              <div className="flex items-center gap-2 mb-0.5">
+                <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: p.color }} />
+                <span className="text-xs text-[var(--text-primary)] truncate">{p.title}</span>
+              </div>
+              <div className="flex items-center gap-2 ml-4">
+                <span className="text-[9px] text-[var(--text-muted)]">{p.tasks?.length || 0} tasks</span>
+                {p.target_date && <span className="text-[9px] text-[var(--text-muted)]">→ {p.target_date}</span>}
+              </div>
+            </button>
+          ))}
+          {projects.length === 0 && (
+            <p className="text-[10px] text-[var(--text-muted)] text-center py-4">no projects</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
-  // If drilled into a project, show its kanban
-  if (activeProject) {
+  // ─── PANE 2: Kanban Board ────────────────────────────────────────
+  function renderKanban() {
+    if (!activeProject) {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <p className="text-sm text-[var(--text-muted)]">select a project</p>
+        </div>
+      );
+    }
+
     const tasksByStatus = {};
     kanbanColumns.forEach(c => { tasksByStatus[c] = (activeProject.tasks || []).filter(t => t.status === c); });
 
     return (
-      <div className="h-full flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Project header */}
-        <div className="border-b border-[var(--border)] px-6 py-4">
-          <div className="flex items-center gap-3">
-            <button onClick={() => setActiveProject(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
-              <ArrowLeft size={16} />
-            </button>
-            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activeProject.color }} />
-            <div>
-              <h2 className="mono-heading text-lg text-[var(--text-primary)]">{activeProject.title}</h2>
-              <div className="flex items-center gap-3 mt-0.5">
-                {activeProject.start_date && <span className="text-[10px] text-[var(--text-muted)]">{activeProject.start_date} → {activeProject.target_date || '?'}</span>}
-                <span className="text-[10px] text-[var(--text-muted)]">{activeProject.tasks?.length || 0} tasks</span>
-              </div>
-            </div>
+        <div className="px-4 py-3 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: activeProject.color }} />
+            <h2 className="mono-heading text-sm text-[var(--text-primary)]">{activeProject.title}</h2>
+            <span className="text-[10px] text-[var(--text-muted)]">
+              {activeProject.start_date} → {activeProject.target_date || '?'}
+            </span>
           </div>
           {activeProject.brief && (
-            <p className="text-xs text-[var(--text-secondary)] mt-2 ml-8 max-w-3xl">{activeProject.brief}</p>
+            <p className="text-[11px] text-[var(--text-muted)] mt-1 ml-4 line-clamp-2">{activeProject.brief}</p>
           )}
         </div>
 
-        {/* Kanban board */}
-        <div className="flex-1 overflow-x-auto p-4">
-          <div className="flex gap-3 min-w-max h-full">
+        {/* Kanban columns */}
+        <div className="flex-1 overflow-x-auto p-3">
+          <div className="flex gap-2 h-full min-w-max">
             {kanbanColumns.map(col => (
-              <div key={col} className="w-64 flex flex-col">
-                <div className="flex items-center justify-between px-2 py-2 mb-2">
-                  <span className="mono-heading text-xs text-[var(--text-muted)] uppercase tracking-wider">{kanbanLabels[col]}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-muted)]">
+              <div key={col} className="w-52 flex flex-col">
+                <div className="flex items-center justify-between px-1.5 py-1.5 mb-1.5">
+                  <span className="mono-heading text-[10px] text-[var(--text-muted)] uppercase tracking-wider">{kanbanLabels[col]}</span>
+                  <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-muted)]">
                     {tasksByStatus[col]?.length || 0}
                   </span>
                 </div>
-                <div className="flex-1 space-y-2 overflow-y-auto">
-                  {(tasksByStatus[col] || []).map(task => (
-                    <div key={task.id} className="glass-card p-3 group">
-                      <div className="flex items-start justify-between mb-1">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wider"
-                          style={{ color: priorityColors[task.priority], backgroundColor: `${priorityColors[task.priority]}15` }}>
-                          {task.priority}
-                        </span>
-                        {task.assigned_agent && (
-                          <span className="text-[10px] mono-heading" style={{ color: agentColors[task.assigned_agent] }}>{task.assigned_agent}</span>
+                <div className="flex-1 space-y-1.5 overflow-y-auto">
+                  {(tasksByStatus[col] || []).map(task => {
+                    const isSelected = selectedTask?.id === task.id;
+                    return (
+                      <div key={task.id}
+                        className={`p-2.5 rounded-lg border cursor-pointer group transition-colors ${
+                          isSelected
+                            ? 'bg-[var(--accent-glow)] border-[var(--border-bright)]'
+                            : 'bg-[var(--bg-card)] border-[var(--border)] hover:border-[var(--border-bright)]'
+                        }`}
+                        onClick={() => { setSelectedTask(task); setChatMessages([]); }}>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] px-1 py-0.5 rounded uppercase tracking-wider mono-heading"
+                            style={{ color: priorityColors[task.priority], backgroundColor: `${priorityColors[task.priority]}10` }}>
+                            {task.priority}
+                          </span>
+                          {task.assigned_agent && (
+                            <span className="text-[9px] mono-heading" style={{ color: agentColors[task.assigned_agent] }}>{task.assigned_agent}</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-[var(--text-primary)] leading-tight">{task.title}</p>
+                        {task.depends_on?.length > 0 && (
+                          <div className="flex items-center gap-1 mt-1">
+                            <Lock size={8} className="text-[var(--text-muted)]" />
+                            <span className="text-[8px] text-[var(--text-muted)]">blocked</span>
+                          </div>
+                        )}
+                        {col !== 'done' && (
+                          <div className="mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button onClick={e => { e.stopPropagation(); moveMission(task.id, kanbanColumns[kanbanColumns.indexOf(col) + 1]); }}
+                              className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)] mono-heading">
+                              {kanbanLabels[kanbanColumns[kanbanColumns.indexOf(col) + 1]]} →
+                            </button>
+                          </div>
                         )}
                       </div>
-                      <p className="text-sm text-[var(--text-primary)] mb-1">{task.title}</p>
-                      {task.start_date && (
-                        <p className="text-[10px] text-[var(--text-muted)]">
-                          {task.start_date}{task.end_date ? ` → ${task.end_date}` : ''}
-                        </p>
-                      )}
-                      {task.depends_on?.length > 0 && (
-                        <div className="flex items-center gap-1 mt-1">
-                          <Lock size={8} className="text-[var(--text-muted)]" />
-                          <span className="text-[9px] text-[var(--text-muted)]">blocked by {task.depends_on.length} task(s)</span>
-                        </div>
-                      )}
-                      {col !== 'done' && (
-                        <div className="mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={() => moveMission(task.id, kanbanColumns[kanbanColumns.indexOf(col) + 1])}
-                            className="text-[10px] px-2 py-0.5 rounded bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)] hover:bg-[var(--accent)] hover:text-[var(--bg-deep)] transition-colors">
-                            {kanbanLabels[kanbanColumns[kanbanColumns.indexOf(col) + 1]]} <ChevronRight size={10} className="inline" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             ))}
@@ -167,135 +195,143 @@ export default function Projects() {
     );
   }
 
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="p-6">
-        <h1 className="mono-heading text-2xl text-[var(--text-primary)] mb-6">projects</h1>
+  // ─── PANE 3: Task Detail + Work Product ──────────────────────────
+  function renderDetail() {
+    if (!selectedTask) {
+      return (
+        <div className="w-80 flex-shrink-0 border-l border-[var(--border)] bg-[var(--bg-surface)] flex items-center justify-center">
+          <p className="text-xs text-[var(--text-muted)]">select a task</p>
+        </div>
+      );
+    }
 
-        {projects.length === 0 && (
-          <p className="text-sm text-[var(--text-muted)] text-center py-12">no active projects</p>
+    const detail = taskDetail || selectedTask;
+
+    return (
+      <div className="w-96 flex-shrink-0 border-l border-[var(--border)] bg-[var(--bg-surface)] flex flex-col h-full">
+        {/* Task header */}
+        <div className="p-4 border-b border-[var(--border)]">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] px-1.5 py-0.5 rounded mono-heading uppercase"
+                style={{ color: priorityColors[detail.priority], backgroundColor: `${priorityColors[detail.priority]}15` }}>
+                {detail.priority}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-hover)] text-[var(--text-muted)] mono-heading">{detail.status}</span>
+            </div>
+            <button onClick={() => setSelectedTask(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
+              <X size={14} />
+            </button>
+          </div>
+          <h3 className="text-sm text-[var(--text-primary)] leading-tight">{detail.title}</h3>
+          {detail.assigned_agent && (
+            <span className="text-[10px] mono-heading mt-1 inline-block" style={{ color: agentColors[detail.assigned_agent] }}>@{detail.assigned_agent}</span>
+          )}
+          {detail.description && (
+            <p className="text-xs text-[var(--text-secondary)] mt-2 leading-relaxed">{detail.description}</p>
+          )}
+          {(detail.start_date || detail.end_date) && (
+            <p className="text-[10px] text-[var(--text-muted)] mt-2">{detail.start_date || '?'} → {detail.end_date || '?'}</p>
+          )}
+        </div>
+
+        {/* Linked files */}
+        {taskDetail?.files?.length > 0 && (
+          <div className="px-4 py-2 border-b border-[var(--border)]">
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">files</span>
+            <div className="mt-1 space-y-1">
+              {taskDetail.files.map(f => (
+                <button key={f.id} onClick={() => setPreviewFileId(f.id)}
+                  className="w-full flex items-center gap-2 p-1.5 rounded bg-[var(--bg-card)] border border-[var(--border)] hover:border-[var(--border-bright)] text-left">
+                  <FileText size={10} className="text-[#22c55e] flex-shrink-0" />
+                  <span className="text-[11px] text-[var(--text-primary)] truncate">{f.filename}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
-        {projects.map(project => {
-          const isExpanded = expandedBrief === project.id;
-          return (
-            <div key={project.id} className="mb-8">
-              {/* Project Header + Brief */}
-              <div className="glass-card p-4 mb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: project.color }} />
-                    <div>
-                      <h2 className="mono-heading text-lg text-[var(--text-primary)] cursor-pointer hover:text-[var(--accent)] transition-colors" onClick={() => setActiveProject(project)}>
-                        {project.title}
-                      </h2>
-                      <div className="flex items-center gap-3 mt-1">
-                        {project.start_date && <span className="text-[10px] text-[var(--text-muted)]">{project.start_date}</span>}
-                        {project.target_date && <span className="text-[10px] text-[var(--text-muted)]">→ {project.target_date}</span>}
-                        <span className="text-[10px] text-[var(--text-muted)]">{project.tasks?.length || 0} tasks</span>
-                        <button onClick={() => setExpandedBrief(isExpanded ? null : project.id)} className="text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
-                          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        </button>
-                        <button onClick={() => setActiveProject(project)}
-                          className="text-[10px] text-[var(--accent)] hover:underline mono-heading">
-                          open board →
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <span className="text-[10px] px-2 py-0.5 rounded mono-heading" style={{ color: project.color, backgroundColor: `${project.color}15` }}>{project.status}</span>
+        {/* Linked actions */}
+        {taskDetail?.actions?.length > 0 && (
+          <div className="px-4 py-2 border-b border-[var(--border)]">
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">actions</span>
+            <div className="mt-1 space-y-1">
+              {taskDetail.actions.map(a => (
+                <div key={a.id} className="flex items-center justify-between p-1.5 rounded bg-[var(--bg-card)] border border-[var(--border)]">
+                  <span className="text-[11px] text-[var(--text-primary)] truncate">{a.title}</span>
+                  <span className={`text-[9px] px-1 rounded ${
+                    a.status === 'completed' ? 'text-[#22c55e]' : a.status === 'pending' ? 'text-[#f59e0b]' : 'text-[var(--text-muted)]'
+                  }`}>{a.status}</span>
                 </div>
-
-                {/* Brief (expandable) */}
-                {isExpanded && project.brief && (
-                  <div className="mt-3 p-3 rounded-lg bg-[var(--bg-deep)] border border-[var(--border)] text-sm text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap">
-                    {project.brief}
-                  </div>
-                )}
-              </div>
-
-              {/* Gantt Chart */}
-              <div className="glass-card overflow-hidden">
-                {/* Timeline header */}
-                <div className="relative h-6 border-b border-[var(--border)] bg-[var(--bg-deep)]">
-                  {months.map((m, i) => (
-                    <div key={i} className="absolute top-0 h-full border-l border-[var(--border)] flex items-center" style={{ left: m.left }}>
-                      <span className="text-[9px] text-[var(--text-muted)] mono-heading px-1">{m.label}</span>
-                    </div>
-                  ))}
-                  {/* Today marker */}
-                  <div className="absolute top-0 h-full w-px bg-[var(--red)]" style={{ left: `${(todayOffset / totalDays) * 100}%` }}>
-                    <span className="absolute -top-0 left-1 text-[8px] text-[var(--red)] mono-heading">today</span>
-                  </div>
-                </div>
-
-                {/* Task rows */}
-                {project.tasks?.map(task => {
-                  const StatusIcon = statusIcons[task.status] || Circle;
-                  const barStyle = getBarStyle(task.start_date, task.end_date, project.color);
-                  const isDone = task.status === 'done' || task.status === 'dropped';
-                  const hasDeps = task.depends_on?.length > 0;
-
-                  return (
-                    <div key={task.id} className={`flex border-b border-[var(--border)] last:border-b-0 ${isDone ? 'opacity-50' : ''}`}>
-                      {/* Left label */}
-                      <div className="w-72 flex-shrink-0 p-2.5 border-r border-[var(--border)] flex items-center gap-2">
-                        <StatusIcon size={12} style={{ color: isDone ? '#22c55e' : priorityColors[task.priority] || '#64748b' }} />
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-xs truncate ${isDone ? 'line-through text-[var(--text-muted)]' : 'text-[var(--text-primary)]'}`}>{task.title}</p>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            {task.assigned_agent && (
-                              <span className="text-[9px] mono-heading" style={{ color: agentColors[task.assigned_agent] }}>{task.assigned_agent}</span>
-                            )}
-                            {hasDeps && <Lock size={8} className="text-[var(--text-muted)]" />}
-                            <span className="text-[9px] text-[var(--text-muted)]">{task.status}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right timeline */}
-                      <div className="flex-1 relative h-12">
-                        {/* Grid lines */}
-                        {months.map((m, i) => (
-                          <div key={i} className="absolute top-0 h-full border-l border-[var(--border)] opacity-30" style={{ left: m.left }} />
-                        ))}
-                        {/* Today */}
-                        <div className="absolute top-0 h-full w-px bg-[var(--red)] opacity-40" style={{ left: `${(todayOffset / totalDays) * 100}%` }} />
-                        {/* Bar */}
-                        {barStyle && (
-                          <div className="absolute top-2.5 h-7 rounded-r-md flex items-center px-2" style={barStyle}>
-                            {task.start_date && (
-                              <span className="text-[8px] text-[var(--text-muted)] mono-heading whitespace-nowrap">
-                                {new Date(task.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                {task.end_date && ` → ${new Date(task.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {/* Dependency arrows */}
-                        {hasDeps && task.depends_on.map(depId => {
-                          const depTask = project.tasks.find(t => t.id === depId);
-                          if (!depTask?.end_date) return null;
-                          const depEnd = new Date(depTask.end_date);
-                          const depOffset = (depEnd - minDate) / (1000 * 60 * 60 * 24);
-                          return (
-                            <div key={depId} className="absolute top-5 w-2 h-2 rounded-full bg-[var(--text-muted)]"
-                              style={{ left: `${(depOffset / totalDays) * 100}%` }} />
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {(!project.tasks || project.tasks.length === 0) && (
-                  <div className="p-4 text-xs text-[var(--text-muted)] text-center">no tasks yet</div>
-                )}
-              </div>
+              ))}
             </div>
-          );
-        })}
+          </div>
+        )}
+
+        {/* Timeline */}
+        {taskDetail?.activity?.length > 0 && (
+          <div className="px-4 py-2 border-b border-[var(--border)] max-h-32 overflow-y-auto">
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">timeline</span>
+            <div className="mt-1 space-y-0.5 border-l border-[var(--border)] ml-1 pl-2">
+              {taskDetail.activity.slice(0, 8).map((a, i) => (
+                <div key={i} className="py-0.5">
+                  <span className="text-[9px] text-[var(--text-muted)]">
+                    {a.timestamp ? new Date(a.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
+                  </span>
+                  <p className="text-[10px] text-[var(--text-secondary)]">{a.content}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Chat with Shams about this task */}
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="px-4 py-2 border-b border-[var(--border)]">
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">work on this task with shams</span>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {chatMessages.length === 0 && (
+              <p className="text-[10px] text-[var(--text-muted)] text-center py-4">
+                ask shams to work on this — draft a doc, research, update status...
+              </p>
+            )}
+            {chatMessages.map((m, i) => (
+              <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[90%] rounded-lg px-2.5 py-1.5 text-[11px] whitespace-pre-wrap ${
+                  m.role === 'user'
+                    ? 'bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)]'
+                    : 'bg-[var(--bg-card)] border border-[var(--border)] text-[var(--text-primary)]'
+                }`}>
+                  <SmartMessage content={m.content} />
+                </div>
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="flex justify-start">
+                <div className="bg-[var(--bg-card)] border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-[11px] text-[var(--text-muted)]">
+                  <span className="pulse-active">working...</span>
+                </div>
+              </div>
+            )}
+            <div ref={chatBottomRef} />
+          </div>
+          <ChatInput
+            onSend={handleTaskChat}
+            placeholder="work on this task..."
+            disabled={chatLoading}
+          />
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full">
+      {renderProjectList()}
+      {renderKanban()}
+      {renderDetail()}
+      {previewFileId && <FilePreviewModal fileId={previewFileId} onClose={() => setPreviewFileId(null)} />}
     </div>
   );
 }

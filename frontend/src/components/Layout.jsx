@@ -7,20 +7,10 @@ import { useNotifications } from './ToastProvider';
 const nav = [
   { to: '/', label: 'today', icon: Zap, end: true },
   { to: '/projects', label: 'projects', icon: GanttChart },
-  { to: '/missions', label: 'missions', icon: LayoutGrid },
-  { to: '/actions', label: 'actions', icon: ShieldCheck, badgeKey: 'actions_pending' },
+  { to: '/deals', label: 'deals', icon: Target },
+  { to: '/money', label: 'money', icon: DollarSign },
   { to: '/inbox', label: 'inbox', icon: Inbox, badgeKey: 'inbox_p1p2' },
   { to: '/war-room', label: 'war room', icon: Users },
-  { to: '/conversations', label: 'history', icon: History },
-  { to: '/memory', label: 'memory', icon: Brain },
-  { to: '/loops', label: 'open loops', icon: RefreshCw },
-  { to: '/decisions', label: 'decisions', icon: Scale },
-  { to: '/briefings', label: 'briefings', icon: FileText },
-  { to: '/files', label: 'files', icon: FolderOpen },
-  { to: '/money', label: 'money', icon: DollarSign },
-  { to: '/deals', label: 'deals', icon: Target },
-  { to: '/delegations', label: 'delegations', icon: Send },
-  { to: '/integrations', label: 'integrations', icon: Plug },
   { to: '/settings', label: 'settings', icon: Settings },
 ];
 
