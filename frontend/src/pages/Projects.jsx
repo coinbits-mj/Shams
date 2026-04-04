@@ -167,27 +167,19 @@ export default function Projects() {
                 {activeProject.start_date} → {activeProject.target_date || '?'}
               </span>
             </div>
-            <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
-              <button onClick={() => setViewMode('board')}
-                className={`px-2 py-1 text-[10px] mono-heading flex items-center gap-1 ${viewMode === 'board' ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
-                <LayoutGrid size={10} /> board
-              </button>
-              <button onClick={() => setViewMode('timeline')}
-                className={`px-2 py-1 text-[10px] mono-heading flex items-center gap-1 border-l border-[var(--border)] ${viewMode === 'timeline' ? 'bg-[var(--accent-glow)] text-[var(--accent)]' : 'text-[var(--text-muted)]'}`}>
-                <GanttChart size={10} /> timeline
-              </button>
-            </div>
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">
+              {tasks.filter(t => t.status === 'done').length} of {tasks.length} done
+            </span>
           </div>
           {activeProject.brief && (
             <p className="text-[11px] text-[var(--text-muted)] mt-1 ml-4 line-clamp-2">{activeProject.brief}</p>
           )}
         </div>
 
-        {/* Board view */}
-        {viewMode === 'board' && (
-          <div className="flex-1 overflow-x-auto p-3">
-            <div className="flex gap-2 h-full min-w-max">
-              {kanbanColumns.map(col => (
+        {/* Board view — top half */}
+        <div className="flex-1 overflow-x-auto p-3 min-h-0">
+          <div className="flex gap-2 h-full min-w-max">
+            {kanbanColumns.map(col => (
               <div key={col} className="w-52 flex flex-col">
                 <div className="flex items-center justify-between px-1.5 py-1.5 mb-1.5">
                   <span className="mono-heading text-[10px] text-[var(--text-muted)] uppercase tracking-wider">{kanbanLabels[col]}</span>
@@ -238,11 +230,9 @@ export default function Projects() {
             ))}
           </div>
         </div>
-        )}
 
-        {/* Timeline view */}
-        {viewMode === 'timeline' && (
-          <div className="flex-1 overflow-auto">
+        {/* Timeline view — bottom half */}
+        <div className="h-64 flex-shrink-0 border-t border-[var(--border)] overflow-auto">
             {/* Month headers */}
             <div className="relative h-6 border-b border-[var(--border)] bg-[var(--bg-deep)] sticky top-0 z-10">
               {months.map((m, i) => (
@@ -295,8 +285,7 @@ export default function Projects() {
                 </div>
               );
             })}
-          </div>
-        )}
+        </div>
       </div>
     );
   }
