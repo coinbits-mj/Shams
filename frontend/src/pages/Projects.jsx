@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { get } from '../api';
-import { ChevronDown, ChevronRight, Circle, CheckCircle, Clock, AlertTriangle, Lock } from 'lucide-react';
+import { get, patch } from '../api';
+import { ChevronDown, ChevronRight, Circle, CheckCircle, Clock, AlertTriangle, Lock, ArrowLeft, X } from 'lucide-react';
 
 const agentColors = {
   shams: '#f59e0b', rumi: '#06b6d4', leo: '#22c55e',
@@ -14,8 +14,26 @@ const priorityColors = { urgent: '#ef4444', high: '#f97316', normal: '#38bdf8', 
 export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [expandedBrief, setExpandedBrief] = useState(null);
+  const [activeProject, setActiveProject] = useState(null); // drilled-in project kanban
 
-  useEffect(() => { get('/gantt').then(d => d && setProjects(d)); }, []);
+  async function loadProjects() {
+    const d = await get('/gantt');
+    if (d) setProjects(d);
+  }
+
+  useEffect(() => { loadProjects(); }, []);
+
+  async function moveMission(missionId, newStatus) {
+    await patch(`/missions/${missionId}`, { status: newStatus });
+    loadProjects();
+    // Refresh active project
+    if (activeProject) {
+      const updated = await get(`/projects/${activeProject.id}`);
+      if (updated) setActiveProject({ ...activeProject, tasks: updated.missions?.map(m => ({
+        ...m, assigned_agent: m.assigned_agent, depends_on: m.depends_on || [],
+      })) || [] });
+    }
+  }
 
   // Calculate timeline bounds
   let minDate = new Date();
@@ -65,6 +83,90 @@ export default function Projects() {
     cursor.setMonth(cursor.getMonth() + 1);
   }
 
+  const kanbanColumns = ['inbox', 'assigned', 'active', 'review', 'done'];
+  const kanbanLabels = { inbox: 'Inbox', assigned: 'Assigned', active: 'Active', review: 'Review', done: 'Done' };
+
+  // If drilled into a project, show its kanban
+  if (activeProject) {
+    const tasksByStatus = {};
+    kanbanColumns.forEach(c => { tasksByStatus[c] = (activeProject.tasks || []).filter(t => t.status === c); });
+
+    return (
+      <div className="h-full flex flex-col">
+        {/* Project header */}
+        <div className="border-b border-[var(--border)] px-6 py-4">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setActiveProject(null)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">
+              <ArrowLeft size={16} />
+            </button>
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: activeProject.color }} />
+            <div>
+              <h2 className="mono-heading text-lg text-[var(--text-primary)]">{activeProject.title}</h2>
+              <div className="flex items-center gap-3 mt-0.5">
+                {activeProject.start_date && <span className="text-[10px] text-[var(--text-muted)]">{activeProject.start_date} → {activeProject.target_date || '?'}</span>}
+                <span className="text-[10px] text-[var(--text-muted)]">{activeProject.tasks?.length || 0} tasks</span>
+              </div>
+            </div>
+          </div>
+          {activeProject.brief && (
+            <p className="text-xs text-[var(--text-secondary)] mt-2 ml-8 max-w-3xl">{activeProject.brief}</p>
+          )}
+        </div>
+
+        {/* Kanban board */}
+        <div className="flex-1 overflow-x-auto p-4">
+          <div className="flex gap-3 min-w-max h-full">
+            {kanbanColumns.map(col => (
+              <div key={col} className="w-64 flex flex-col">
+                <div className="flex items-center justify-between px-2 py-2 mb-2">
+                  <span className="mono-heading text-xs text-[var(--text-muted)] uppercase tracking-wider">{kanbanLabels[col]}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-muted)]">
+                    {tasksByStatus[col]?.length || 0}
+                  </span>
+                </div>
+                <div className="flex-1 space-y-2 overflow-y-auto">
+                  {(tasksByStatus[col] || []).map(task => (
+                    <div key={task.id} className="glass-card p-3 group">
+                      <div className="flex items-start justify-between mb-1">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium uppercase tracking-wider"
+                          style={{ color: priorityColors[task.priority], backgroundColor: `${priorityColors[task.priority]}15` }}>
+                          {task.priority}
+                        </span>
+                        {task.assigned_agent && (
+                          <span className="text-[10px] mono-heading" style={{ color: agentColors[task.assigned_agent] }}>{task.assigned_agent}</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-[var(--text-primary)] mb-1">{task.title}</p>
+                      {task.start_date && (
+                        <p className="text-[10px] text-[var(--text-muted)]">
+                          {task.start_date}{task.end_date ? ` → ${task.end_date}` : ''}
+                        </p>
+                      )}
+                      {task.depends_on?.length > 0 && (
+                        <div className="flex items-center gap-1 mt-1">
+                          <Lock size={8} className="text-[var(--text-muted)]" />
+                          <span className="text-[9px] text-[var(--text-muted)]">blocked by {task.depends_on.length} task(s)</span>
+                        </div>
+                      )}
+                      {col !== 'done' && (
+                        <div className="mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button onClick={() => moveMission(task.id, kanbanColumns[kanbanColumns.indexOf(col) + 1])}
+                            className="text-[10px] px-2 py-0.5 rounded bg-[var(--accent-glow)] text-[var(--accent)] border border-[var(--border-bright)] hover:bg-[var(--accent)] hover:text-[var(--bg-deep)] transition-colors">
+                            {kanbanLabels[kanbanColumns[kanbanColumns.indexOf(col) + 1]]} <ChevronRight size={10} className="inline" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6">
@@ -81,15 +183,23 @@ export default function Projects() {
               {/* Project Header + Brief */}
               <div className="glass-card p-4 mb-3">
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3 cursor-pointer" onClick={() => setExpandedBrief(isExpanded ? null : project.id)}>
+                  <div className="flex items-center gap-3">
                     <div className="w-3 h-3 rounded-full" style={{ backgroundColor: project.color }} />
                     <div>
-                      <h2 className="mono-heading text-lg text-[var(--text-primary)]">{project.title}</h2>
+                      <h2 className="mono-heading text-lg text-[var(--text-primary)] cursor-pointer hover:text-[var(--accent)] transition-colors" onClick={() => setActiveProject(project)}>
+                        {project.title}
+                      </h2>
                       <div className="flex items-center gap-3 mt-1">
                         {project.start_date && <span className="text-[10px] text-[var(--text-muted)]">{project.start_date}</span>}
                         {project.target_date && <span className="text-[10px] text-[var(--text-muted)]">→ {project.target_date}</span>}
                         <span className="text-[10px] text-[var(--text-muted)]">{project.tasks?.length || 0} tasks</span>
-                        {isExpanded ? <ChevronDown size={12} className="text-[var(--text-muted)]" /> : <ChevronRight size={12} className="text-[var(--text-muted)]" />}
+                        <button onClick={() => setExpandedBrief(isExpanded ? null : project.id)} className="text-[var(--text-muted)] hover:text-[var(--text-secondary)]">
+                          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        </button>
+                        <button onClick={() => setActiveProject(project)}
+                          className="text-[10px] text-[var(--accent)] hover:underline mono-heading">
+                          open board →
+                        </button>
                       </div>
                     </div>
                   </div>
