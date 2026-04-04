@@ -16,8 +16,10 @@ const kanbanLabels = { inbox: 'Inbox', assigned: 'Assigned', active: 'Active', r
 export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
-  const [viewMode, setViewMode] = useState('board'); // 'board' or 'timeline'
   const [selectedTask, setSelectedTask] = useState(null);
+  const [splitPct, setSplitPct] = useState(60); // kanban takes 60% by default
+  const isDragging = useRef(false);
+  const splitContainerRef = useRef(null);
   const [taskDetail, setTaskDetail] = useState(null);
   const [previewFileId, setPreviewFileId] = useState(null);
 
@@ -50,6 +52,31 @@ export default function Projects() {
 
   // Auto-scroll chat
   useEffect(() => { chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  function handleDragStart(e) {
+    e.preventDefault();
+    isDragging.current = true;
+    document.addEventListener('mousemove', handleDragMove);
+    document.addEventListener('mouseup', handleDragEnd);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }
+
+  function handleDragMove(e) {
+    if (!isDragging.current || !splitContainerRef.current) return;
+    const rect = splitContainerRef.current.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const pct = Math.min(85, Math.max(15, (y / rect.height) * 100));
+    setSplitPct(pct);
+  }
+
+  function handleDragEnd() {
+    isDragging.current = false;
+    document.removeEventListener('mousemove', handleDragMove);
+    document.removeEventListener('mouseup', handleDragEnd);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }
 
   async function moveMission(missionId, newStatus) {
     await patch(`/missions/${missionId}`, { status: newStatus });
@@ -176,8 +203,11 @@ export default function Projects() {
           )}
         </div>
 
-        {/* Board view — top half */}
-        <div className="flex-1 overflow-x-auto p-3 min-h-0">
+        {/* Splittable area */}
+        <div ref={splitContainerRef} className="flex-1 flex flex-col min-h-0">
+
+        {/* Board view — top */}
+        <div className="overflow-x-auto overflow-y-auto p-3" style={{ height: `${splitPct}%` }}>
           <div className="flex gap-2 h-full min-w-max">
             {kanbanColumns.map(col => (
               <div key={col} className="w-52 flex flex-col">
@@ -231,8 +261,14 @@ export default function Projects() {
           </div>
         </div>
 
-        {/* Timeline view — bottom half */}
-        <div className="h-64 flex-shrink-0 border-t border-[var(--border)] overflow-auto">
+        {/* Drag handle */}
+        <div onMouseDown={handleDragStart}
+          className="h-2 flex-shrink-0 border-y border-[var(--border)] cursor-row-resize hover:bg-[var(--accent-glow)] transition-colors flex items-center justify-center">
+          <div className="w-8 h-0.5 rounded-full bg-[var(--text-muted)] opacity-50" />
+        </div>
+
+        {/* Timeline view — bottom */}
+        <div className="overflow-auto" style={{ height: `${100 - splitPct}%` }}>
             {/* Month headers */}
             <div className="relative h-6 border-b border-[var(--border)] bg-[var(--bg-deep)] sticky top-0 z-10">
               {months.map((m, i) => (
@@ -286,6 +322,7 @@ export default function Projects() {
               );
             })}
         </div>
+        </div>{/* end split container */}
       </div>
     );
   }
