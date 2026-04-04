@@ -13,6 +13,7 @@ import Files from './pages/Files';
 import Mercury from './pages/Mercury';
 import Money from './pages/Money';
 import Deals from './pages/Deals';
+import Projects from './pages/Projects';
 import Delegations from './pages/Delegations';
 import Integrations from './pages/Integrations';
 import Conversations from './pages/Conversations';
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="files" element={<Files />} />
           <Route path="money" element={<Money />} />
           <Route path="deals" element={<Deals />} />
+          <Route path="projects" element={<Projects />} />
           <Route path="delegations" element={<Delegations />} />
           <Route path="mercury" element={<Mercury />} />
           <Route path="integrations" element={<Integrations />} />

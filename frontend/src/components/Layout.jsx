@@ -1,10 +1,12 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
-import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, DollarSign, History, Plug, ShieldCheck, Inbox, Settings, Zap, Target, Send } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, DollarSign, History, Plug, ShieldCheck, Inbox, Settings, Zap, Target, Send, GanttChart, Sun, Moon } from 'lucide-react';
 import { useNotifications } from './ToastProvider';
 
 const nav = [
   { to: '/', label: 'today', icon: Zap, end: true },
+  { to: '/projects', label: 'projects', icon: GanttChart },
   { to: '/missions', label: 'missions', icon: LayoutGrid },
   { to: '/actions', label: 'actions', icon: ShieldCheck, badgeKey: 'actions_pending' },
   { to: '/inbox', label: 'inbox', icon: Inbox, badgeKey: 'inbox_p1p2' },
@@ -25,6 +27,16 @@ const nav = [
 export default function Layout() {
   const navigate = useNavigate();
   const { counts } = useNotifications();
+  const [theme, setTheme] = useState(localStorage.getItem('shams_theme') || 'dark');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('shams_theme', theme);
+  }, [theme]);
+
+  function toggleTheme() {
+    setTheme(t => t === 'dark' ? 'light' : 'dark');
+  }
 
   async function handleLogout() {
     await post('/auth/logout');
@@ -66,12 +78,16 @@ export default function Layout() {
             );
           })}
         </nav>
-        <button
-          onClick={handleLogout}
-          className="m-3 p-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors mono-heading"
-        >
-          logout
-        </button>
+        <div className="m-3 flex items-center justify-between">
+          <button onClick={toggleTheme}
+            className="p-2 text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors">
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+          <button onClick={handleLogout}
+            className="p-2 text-[11px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors mono-heading">
+            logout
+          </button>
+        </div>
       </aside>
       <main className="flex-1 overflow-auto dot-grid">
         <Outlet />

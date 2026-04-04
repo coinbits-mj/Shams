@@ -496,6 +496,75 @@ def update_action_status(action_id: int, status: str, result: str = ""):
             )
 
 
+# ── Projects ───────────────────────────────────────────────────────────────
+
+def create_project(title: str, brief: str = "", start_date: str | None = None,
+                   target_date: str | None = None, color: str = "#38bdf8") -> int:
+    with _conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}projects (title, brief, start_date, target_date, color) "
+            f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (title, brief, start_date, target_date, color),
+        )
+        return cur.fetchone()[0]
+
+
+def get_projects(status: str | None = None) -> list[dict]:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if status:
+            cur.execute(f"SELECT * FROM {P}projects WHERE status = %s ORDER BY created_at", (status,))
+        else:
+            cur.execute(f"SELECT * FROM {P}projects ORDER BY created_at")
+        return cur.fetchall()
+
+
+def get_project_with_missions(project_id: int) -> dict | None:
+    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}projects WHERE id = %s", (project_id,))
+        proj = cur.fetchone()
+        if not proj:
+            return None
+        cur.execute(
+            f"SELECT * FROM {P}missions WHERE project_id = %s "
+            f"ORDER BY CASE WHEN start_date IS NOT NULL THEN start_date ELSE created_at::date END",
+            (project_id,),
+        )
+        proj = dict(proj)
+        proj["missions"] = [dict(m) for m in cur.fetchall()]
+        return proj
+
+
+def update_project(project_id: int, **kwargs):
+    with _conn() as conn, conn.cursor() as cur:
+        sets = ["updated_at = NOW()"]
+        params = []
+        for k, v in kwargs.items():
+            if k in ("title", "brief", "status", "start_date", "target_date", "color"):
+                sets.append(f"{k} = %s")
+                params.append(v)
+        params.append(project_id)
+        cur.execute(f"UPDATE {P}projects SET {', '.join(sets)} WHERE id = %s", params)
+
+
+def link_mission_to_project(mission_id: int, project_id: int,
+                            start_date: str | None = None, end_date: str | None = None,
+                            depends_on: list | None = None):
+    with _conn() as conn, conn.cursor() as cur:
+        sets = ["project_id = %s"]
+        params = [project_id]
+        if start_date:
+            sets.append("start_date = %s")
+            params.append(start_date)
+        if end_date:
+            sets.append("end_date = %s")
+            params.append(end_date)
+        if depends_on is not None:
+            sets.append("depends_on = %s")
+            params.append(depends_on)
+        params.append(mission_id)
+        cur.execute(f"UPDATE {P}missions SET {', '.join(sets)} WHERE id = %s", params)
+
+
 # ── Deals ───────────────────────────────────────────────────────────────────
 
 def create_deal(title: str, deal_type: str = "acquisition", stage: str = "lead",

@@ -993,6 +993,130 @@ def update_mission(mission_id):
     return jsonify({"ok": True})
 
 
+# ── Projects (Gantt) ────────────────────────────────────────────────────────
+
+@api.route("/projects", methods=["GET"])
+@require_auth
+def get_projects():
+    status = request.args.get("status")
+    projects = memory.get_projects(status)
+    result = []
+    for p in projects:
+        d = dict(p)
+        for k in ("created_at", "updated_at", "start_date", "target_date"):
+            if d.get(k):
+                d[k] = d[k].isoformat() if hasattr(d[k], 'isoformat') else str(d[k])
+        result.append(d)
+    return jsonify(result)
+
+
+@api.route("/projects/<int:project_id>", methods=["GET"])
+@require_auth
+def get_project(project_id):
+    proj = memory.get_project_with_missions(project_id)
+    if not proj:
+        return jsonify({"error": "not found"}), 404
+    for k in ("created_at", "updated_at", "start_date", "target_date"):
+        if proj.get(k):
+            proj[k] = proj[k].isoformat() if hasattr(proj[k], 'isoformat') else str(proj[k])
+    for m in proj.get("missions", []):
+        for k in ("created_at", "updated_at", "start_date", "end_date"):
+            if m.get(k):
+                m[k] = m[k].isoformat() if hasattr(m[k], 'isoformat') else str(m[k])
+    return jsonify(proj)
+
+
+@api.route("/projects", methods=["POST"])
+@require_auth
+def create_project():
+    data = request.get_json(silent=True) or {}
+    title = data.get("title", "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    pid = memory.create_project(
+        title=title, brief=data.get("brief", ""),
+        start_date=data.get("start_date"), target_date=data.get("target_date"),
+        color=data.get("color", "#38bdf8"),
+    )
+    return jsonify({"id": pid})
+
+
+@api.route("/projects/<int:project_id>", methods=["PATCH"])
+@require_auth
+def update_project(project_id):
+    data = request.get_json(silent=True) or {}
+    memory.update_project(project_id, **data)
+    return jsonify({"ok": True})
+
+
+@api.route("/projects/<int:project_id>/gantt", methods=["GET"])
+@require_auth
+def get_project_gantt(project_id):
+    """Get project with missions formatted for Gantt rendering."""
+    proj = memory.get_project_with_missions(project_id)
+    if not proj:
+        return jsonify({"error": "not found"}), 404
+
+    # Build Gantt data
+    gantt = {
+        "id": proj["id"],
+        "title": proj["title"],
+        "brief": proj.get("brief", ""),
+        "color": proj.get("color", "#38bdf8"),
+        "start_date": str(proj["start_date"]) if proj.get("start_date") else None,
+        "target_date": str(proj["target_date"]) if proj.get("target_date") else None,
+        "status": proj["status"],
+        "tasks": [],
+    }
+    for m in proj.get("missions", []):
+        gantt["tasks"].append({
+            "id": m["id"],
+            "title": m["title"],
+            "status": m["status"],
+            "priority": m["priority"],
+            "assigned_agent": m.get("assigned_agent"),
+            "start_date": str(m["start_date"]) if m.get("start_date") else None,
+            "end_date": str(m["end_date"]) if m.get("end_date") else None,
+            "depends_on": m.get("depends_on") or [],
+        })
+    return jsonify(gantt)
+
+
+@api.route("/gantt", methods=["GET"])
+@require_auth
+def get_all_gantt():
+    """Get all active projects with their missions for the full Gantt view."""
+    projects = memory.get_projects("active")
+    result = []
+    for p in projects:
+        proj = memory.get_project_with_missions(p["id"])
+        if not proj:
+            continue
+        gantt = {
+            "id": proj["id"],
+            "title": proj["title"],
+            "brief": proj.get("brief", ""),
+            "color": proj.get("color", "#38bdf8"),
+            "start_date": str(proj["start_date"]) if proj.get("start_date") else None,
+            "target_date": str(proj["target_date"]) if proj.get("target_date") else None,
+            "status": proj["status"],
+            "tasks": [],
+        }
+        for m in proj.get("missions", []):
+            gantt["tasks"].append({
+                "id": m["id"],
+                "title": m["title"],
+                "status": m["status"],
+                "priority": m["priority"],
+                "assigned_agent": m.get("assigned_agent"),
+                "start_date": str(m["start_date"]) if m.get("start_date") else None,
+                "end_date": str(m["end_date"]) if m.get("end_date") else None,
+                "depends_on": m.get("depends_on") or [],
+            })
+        result.append(gantt)
+    return jsonify(result)
+
+
 # ── Alert Rules ─────────────────────────────────────────────────────────────
 
 @api.route("/alert-rules", methods=["GET"])

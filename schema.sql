@@ -180,6 +180,37 @@ CREATE INDEX IF NOT EXISTS idx_actions_status ON shams_actions (status);
 CREATE INDEX IF NOT EXISTS idx_actions_agent ON shams_actions (agent_name, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_actions_created ON shams_actions (created_at DESC);
 
+CREATE TABLE IF NOT EXISTS shams_projects (
+    id              SERIAL PRIMARY KEY,
+    title           VARCHAR(500) NOT NULL,
+    brief           TEXT DEFAULT '',
+    status          VARCHAR(20) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
+    start_date      DATE,
+    target_date     DATE,
+    color           VARCHAR(20) DEFAULT '#38bdf8',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Add project_id, start_date, end_date, depends_on to missions
+DO $$ BEGIN
+    ALTER TABLE shams_missions ADD COLUMN project_id INTEGER REFERENCES shams_projects(id);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_missions ADD COLUMN start_date DATE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_missions ADD COLUMN end_date DATE;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_missions ADD COLUMN depends_on INTEGER[];
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS shams_deals (
     id              SERIAL PRIMARY KEY,
     title           VARCHAR(500) NOT NULL,
