@@ -138,11 +138,24 @@ CREATE TABLE IF NOT EXISTS shams_notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON shams_notifications (seen, created_at DESC);
 
--- Add mission_id to files (idempotent via DO block)
+-- Add mission file room columns (idempotent via DO block)
 DO $$ BEGIN
     ALTER TABLE shams_files ADD COLUMN mission_id INTEGER REFERENCES shams_missions(id);
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_files ADD COLUMN file_category VARCHAR(50) DEFAULT '';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_files ADD COLUMN version INTEGER DEFAULT 1;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+DO $$ BEGIN
+    ALTER TABLE shams_files ADD COLUMN uploaded_by VARCHAR(50) DEFAULT 'maher';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_files_mission ON shams_files (mission_id);
 
 CREATE TABLE IF NOT EXISTS shams_email_triage (
     id              SERIAL PRIMARY KEY,

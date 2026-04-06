@@ -525,8 +525,9 @@ def get_project_with_missions(project_id: int) -> dict | None:
         if not proj:
             return None
         cur.execute(
-            f"SELECT * FROM {P}missions WHERE project_id = %s "
-            f"ORDER BY CASE WHEN start_date IS NOT NULL THEN start_date ELSE created_at::date END",
+            f"SELECT m.*, (SELECT COUNT(*) FROM {P}files f WHERE f.mission_id = m.id) as file_count "
+            f"FROM {P}missions m WHERE m.project_id = %s "
+            f"ORDER BY CASE WHEN m.start_date IS NOT NULL THEN m.start_date ELSE m.created_at::date END",
             (project_id,),
         )
         proj = dict(proj)

@@ -17,9 +17,11 @@ export default function Projects() {
   const [projects, setProjects] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
-  const [splitPct, setSplitPct] = useState(60); // kanban takes 60% by default
+  const [splitPct, setSplitPct] = useState(60);
   const isDragging = useRef(false);
   const splitContainerRef = useRef(null);
+  const [dragTaskId, setDragTaskId] = useState(null);
+  const [dragOverCol, setDragOverCol] = useState(null);
   const [taskDetail, setTaskDetail] = useState(null);
   const [previewFileId, setPreviewFileId] = useState(null);
 
@@ -210,7 +212,10 @@ export default function Projects() {
         <div className="overflow-x-auto overflow-y-auto p-3" style={{ height: `${splitPct}%` }}>
           <div className="flex gap-2 h-full min-w-max">
             {kanbanColumns.map(col => (
-              <div key={col} className="w-52 flex flex-col">
+              <div key={col} className={`w-52 flex flex-col rounded-lg transition-colors ${dragOverCol === col ? 'bg-[var(--accent-glow)]' : ''}`}
+                onDragOver={e => { e.preventDefault(); setDragOverCol(col); }}
+                onDragLeave={() => setDragOverCol(null)}
+                onDrop={e => { e.preventDefault(); setDragOverCol(null); if (dragTaskId) { moveMission(dragTaskId, col); setDragTaskId(null); } }}>
                 <div className="flex items-center justify-between px-1.5 py-1.5 mb-1.5">
                   <span className="mono-heading text-[10px] text-[var(--text-muted)] uppercase tracking-wider">{kanbanLabels[col]}</span>
                   <span className="text-[9px] px-1 py-0.5 rounded bg-[var(--bg-card)] text-[var(--text-muted)]">
@@ -222,10 +227,15 @@ export default function Projects() {
                     const isSelected = selectedTask?.id === task.id;
                     return (
                       <div key={task.id}
-                        className={`p-2.5 rounded-lg border cursor-pointer group transition-colors ${
+                        draggable
+                        onDragStart={() => setDragTaskId(task.id)}
+                        onDragEnd={() => { setDragTaskId(null); setDragOverCol(null); }}
+                        className={`p-2.5 rounded-lg border cursor-grab active:cursor-grabbing group transition-colors ${
                           isSelected
                             ? 'bg-[var(--accent-glow)] border-[var(--border-bright)]'
-                            : 'bg-[var(--bg-card)] border-[var(--border)] hover:border-[var(--border-bright)]'
+                            : dragTaskId === task.id
+                              ? 'opacity-50 bg-[var(--bg-card)] border-[var(--border)]'
+                              : 'bg-[var(--bg-card)] border-[var(--border)] hover:border-[var(--border-bright)]'
                         }`}
                         onClick={() => { setSelectedTask(task); setChatMessages([]); }}>
                         <div className="flex items-center justify-between mb-1">
@@ -238,12 +248,20 @@ export default function Projects() {
                           )}
                         </div>
                         <p className="text-xs text-[var(--text-primary)] leading-tight">{task.title}</p>
-                        {task.depends_on?.length > 0 && (
-                          <div className="flex items-center gap-1 mt-1">
-                            <Lock size={8} className="text-[var(--text-muted)]" />
-                            <span className="text-[8px] text-[var(--text-muted)]">blocked</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2 mt-1">
+                          {task.depends_on?.length > 0 && (
+                            <div className="flex items-center gap-0.5">
+                              <Lock size={7} className="text-[var(--text-muted)]" />
+                              <span className="text-[8px] text-[var(--text-muted)]">blocked</span>
+                            </div>
+                          )}
+                          {task.file_count > 0 && (
+                            <div className="flex items-center gap-0.5">
+                              <FileText size={7} className="text-[#22c55e]" />
+                              <span className="text-[8px] text-[var(--text-muted)]">{task.file_count}</span>
+                            </div>
+                          )}
+                        </div>
                         {col !== 'done' && (
                           <div className="mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button onClick={e => { e.stopPropagation(); moveMission(task.id, kanbanColumns[kanbanColumns.indexOf(col) + 1]); }}
@@ -367,21 +385,55 @@ export default function Projects() {
           )}
         </div>
 
-        {/* Linked files */}
-        {taskDetail?.files?.length > 0 && (
-          <div className="px-4 py-2 border-b border-[var(--border)]">
-            <span className="text-[10px] text-[var(--text-muted)] mono-heading">files</span>
-            <div className="mt-1 space-y-1">
+        {/* File Room */}
+        <div className="px-4 py-2 border-b border-[var(--border)]">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] text-[var(--text-muted)] mono-heading">
+              files {taskDetail?.files?.length > 0 ? `(${taskDetail.files.length})` : ''}
+            </span>
+            <label className="text-[9px] text-[var(--accent)] hover:underline cursor-pointer mono-heading">
+              + upload
+              <input type="file" multiple className="hidden" onChange={async (e) => {
+                const formData = new FormData();
+                for (const f of e.target.files) formData.append('files', f);
+                formData.append('category', 'deliverable');
+                formData.append('description', `Uploaded for: ${detail.title}`);
+                const res = await fetch(`/api/missions/${detail.id}/files`, {
+                  method: 'POST',
+                  headers: { 'Authorization': `Bearer ${localStorage.getItem('shams_session')}` },
+                  body: formData,
+                });
+                if (res.ok) {
+                  const updated = await get(`/missions/${detail.id}`);
+                  if (updated) setTaskDetail(updated);
+                  loadProjects();
+                }
+                e.target.value = '';
+              }} />
+            </label>
+          </div>
+          {taskDetail?.files?.length > 0 ? (
+            <div className="space-y-1">
               {taskDetail.files.map(f => (
                 <button key={f.id} onClick={() => setPreviewFileId(f.id)}
                   className="w-full flex items-center gap-2 p-1.5 rounded bg-[var(--bg-card)] border border-[var(--border)] hover:border-[var(--border-bright)] text-left">
                   <FileText size={10} className="text-[#22c55e] flex-shrink-0" />
-                  <span className="text-[11px] text-[var(--text-primary)] truncate">{f.filename}</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[11px] text-[var(--text-primary)] truncate block">{f.filename}</span>
+                    <span className="text-[8px] text-[var(--text-muted)]">
+                      {f.file_category || f.file_type} {f.version > 1 ? `v${f.version}` : ''}
+                    </span>
+                  </div>
+                  <span className="text-[8px] text-[var(--text-muted)] flex-shrink-0">
+                    {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
+                  </span>
                 </button>
               ))}
             </div>
-          </div>
-        )}
+          ) : (
+            <p className="text-[10px] text-[var(--text-muted)] text-center py-2">drop files here or click upload</p>
+          )}
+        </div>
 
         {/* Linked actions */}
         {taskDetail?.actions?.length > 0 && (

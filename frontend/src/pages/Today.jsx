@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   DollarSign, TrendingUp, TrendingDown, Mail, ShieldCheck, LayoutGrid,
   Heart, Activity, Zap, Clock, ChevronRight, CheckCircle, AlertTriangle,
-  Workflow
+  Workflow, FileText
 } from 'lucide-react';
 
 const priorityColors = { urgent: '#ef4444', high: '#f97316', normal: '#38bdf8', low: '#64748b' };
@@ -15,12 +15,14 @@ const agentColors = {
 
 export default function Today() {
   const [data, setData] = useState(null);
+  const [recentFiles, setRecentFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
   async function load() {
-    const d = await get('/today');
+    const [d, rf] = await Promise.all([get('/today'), get('/files/recent?limit=5')]);
     if (d) setData(d);
+    if (rf) setRecentFiles(rf);
     setLoading(false);
   }
 
@@ -280,6 +282,30 @@ export default function Today() {
             )}
           </div>
         </div>
+
+        {/* Recent Files */}
+        {recentFiles.length > 0 && (
+          <div className="glass-card p-4">
+            <span className="mono-heading text-sm text-[var(--text-primary)] flex items-center gap-2 mb-3">
+              <FileText size={14} className="text-[#22c55e]" /> recent files
+            </span>
+            <div className="flex gap-3 overflow-x-auto">
+              {recentFiles.map(f => (
+                <div key={f.id} className="flex-shrink-0 p-2 rounded-lg bg-[var(--bg-deep)] border border-[var(--border)] min-w-[180px] max-w-[220px] cursor-pointer hover:border-[var(--border-bright)]"
+                  onClick={() => navigate('/projects')}>
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <FileText size={10} className="text-[#22c55e]" />
+                    <span className="text-[11px] text-[var(--text-primary)] truncate">{f.filename}</span>
+                  </div>
+                  {f.mission_title && <p className="text-[9px] text-[var(--text-muted)] truncate">{f.mission_title}</p>}
+                  <p className="text-[9px] text-[var(--text-muted)]">
+                    {f.uploaded_at ? new Date(f.uploaded_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Row 4: Recent Activity */}
         {data.recent_activity?.length > 0 && (
