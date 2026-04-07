@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { get, post } from '../api';
+import { get, post, getSession } from '../api';
 import { CheckCircle, FileText, AlertTriangle, Bell, X, ShieldCheck, LayoutGrid } from 'lucide-react';
 
 const NotificationContext = createContext({ counts: {} });
@@ -29,9 +29,11 @@ export default function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
   const [seenIds, setSeenIds] = useState(new Set());
 
-  // Poll counts every 10s
+  // Poll counts every 10s (only when authenticated)
   useEffect(() => {
+    if (!getSession()) return;
     async function poll() {
+      if (!getSession()) return;
       const data = await get('/notifications/counts');
       if (data) setCounts(data);
     }
@@ -40,9 +42,11 @@ export default function ToastProvider({ children }) {
     return () => clearInterval(i);
   }, []);
 
-  // Poll for new notifications every 10s
+  // Poll for new notifications every 10s (only when authenticated)
   useEffect(() => {
+    if (!getSession()) return;
     async function poll() {
+      if (!getSession()) return;
       const data = await get('/notifications');
       if (!data) return;
       const newToasts = data.filter(n => !seenIds.has(n.id));
