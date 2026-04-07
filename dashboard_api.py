@@ -96,17 +96,26 @@ def login():
 
 @api.route("/auth/verify", methods=["GET"])
 def verify():
-    """Handle magic link click."""
+    """Handle magic link click — sets session and redirects to app."""
     token = request.args.get("token", "")
     email = memory.validate_magic_link(token)
     if not email:
-        return jsonify({"error": "Invalid or expired link"}), 401
+        return """<html><body style="background:#0d1117;color:#e2e8f0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">
+        <div style="text-align:center"><h2>Link expired or invalid</h2><p>Request a new login link.</p><a href="/login" style="color:#38bdf8">Go to login</a></div>
+        </body></html>""", 401
 
     session_token = secrets.token_urlsafe(48)
     memory.create_session(email, session_token)
 
-    # Return JSON with session token
-    return jsonify({"ok": True, "session": session_token, "email": email})
+    # Redirect to app — JS stores the session token and navigates
+    base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
+    return f"""<html><body style="background:#0d1117">
+    <script>
+        localStorage.setItem('shams_session', '{session_token}');
+        window.location.href = '/';
+    </script>
+    <p style="color:#64748b;font-family:sans-serif;text-align:center;margin-top:40vh">Logging in...</p>
+    </body></html>"""
 
 
 @api.route("/auth/me", methods=["GET"])
