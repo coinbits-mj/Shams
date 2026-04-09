@@ -1,7 +1,7 @@
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { clearSession, post } from '../api';
 import { useState, useEffect } from 'react';
-import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, DollarSign, History, Plug, ShieldCheck, Inbox, Settings, Zap, Target, Send, GanttChart, Sun, Moon } from 'lucide-react';
+import { LayoutGrid, MessageSquare, Users, Brain, RefreshCw, Scale, FileText, FolderOpen, DollarSign, History, Plug, ShieldCheck, Inbox, Settings, Zap, Target, Send, GanttChart, Sun, Moon, PenTool } from 'lucide-react';
 import { useNotifications } from './ToastProvider';
 
 const nav = [
@@ -11,6 +11,7 @@ const nav = [
   { to: '/money', label: 'money', icon: DollarSign },
   { to: '/inbox', label: 'inbox', icon: Inbox, badgeKey: 'inbox_p1p2' },
   { to: '/war-room', label: 'war room', icon: Users },
+  { to: '/signatures', label: 'signatures', icon: PenTool },
   { to: '/settings', label: 'settings', icon: Settings },
 ];
 

@@ -388,6 +388,41 @@ TOOLS = [
         },
     },
     {
+        "name": "send_for_signature",
+        "description": "Send a document for e-signature via DocuSeal. Use when Maher needs someone to sign a document — contracts, retainers, LOIs, NDAs, etc. Specify the signers and Shams handles the rest.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_name": {"type": "string", "description": "Name of the document (e.g. 'Retainer Agreement - Somerville')"},
+                "signers": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "email": {"type": "string"},
+                        },
+                        "required": ["name", "email"],
+                    },
+                    "description": "List of people who need to sign",
+                },
+                "message": {"type": "string", "description": "Optional message to include in the signing email"},
+                "file_id": {"type": "integer", "description": "Optional: Shams file ID to use as the document"},
+            },
+            "required": ["document_name", "signers"],
+        },
+    },
+    {
+        "name": "check_signatures",
+        "description": "Check the status of pending signature requests. Shows who has signed and who hasn't.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "How many to check (default 5)", "default": 5},
+            },
+        },
+    },
+    {
         "name": "schedule_task",
         "description": "Create a recurring scheduled task. Use when Maher says 'every Monday...', 'from now on...', 'daily at 8am...', etc. Creates a persistent job that runs automatically on schedule.",
         "input_schema": {
@@ -825,6 +860,55 @@ def _execute_tool(name: str, input_data: dict) -> str:
             memory.update_deal(input_data["deal_id"], **kwargs)
             memory.log_activity("shams", "deal_updated", f"Deal #{input_data['deal_id']} → {kwargs.get('stage', 'updated')}")
             return f"Deal #{input_data['deal_id']} updated."
+
+        elif name == "send_for_signature":
+            import docuseal_client
+            if not docuseal_client.is_configured():
+                return "DocuSeal not configured. Add DOCUSEAL_API_URL and DOCUSEAL_API_TOKEN to environment."
+            signers = [{"email": s["email"], "name": s["name"], "role": "First Party"} for s in input_data["signers"]]
+            # If file_id provided, get the document content
+            if input_data.get("file_id"):
+                f = memory.get_file(input_data["file_id"])
+                if f and f.get("transcript"):
+                    # For now, create from template name — actual PDF upload needs binary
+                    pass
+            # List templates to find matching one, or instruct to upload via dashboard
+            templates = docuseal_client.list_templates()
+            matching = [t for t in templates if input_data["document_name"].lower() in (t.get("name") or "").lower()]
+            if matching:
+                result = docuseal_client.send_for_signature(
+                    matching[0]["id"], signers, send_email=True,
+                    message=input_data.get("message", ""))
+                if result:
+                    memory.log_activity("shams", "signature_sent",
+                        f"Sent '{input_data['document_name']}' to {', '.join(s['name'] for s in input_data['signers'])} for signature")
+                    memory.create_notification("signature_sent",
+                        f"Sent for signature: {input_data['document_name']}",
+                        ", ".join(s["email"] for s in input_data["signers"]), "", None)
+                    signer_list = "\n".join(f"  - {s['name']} ({s['email']})" for s in input_data["signers"])
+                    return f"Signature request sent!\nDocument: {input_data['document_name']}\nSigners:\n{signer_list}\n\nThey'll receive an email with a signing link."
+                return "Failed to send signature request. Check DocuSeal configuration."
+            else:
+                template_names = ", ".join(t.get("name", "?") for t in templates[:5]) if templates else "none"
+                return f"No template found matching '{input_data['document_name']}'. Upload the PDF first via the Signatures page in the dashboard, then try again.\nAvailable templates: {template_names}"
+
+        elif name == "check_signatures":
+            import docuseal_client
+            if not docuseal_client.is_configured():
+                return "DocuSeal not configured."
+            submissions = docuseal_client.list_submissions(limit=input_data.get("limit", 5))
+            if not submissions:
+                return "No signature requests found."
+            lines = []
+            for s in submissions:
+                status = s.get("status", "unknown")
+                submitters = s.get("submitters") or []
+                signer_status = ", ".join(
+                    f"{sub.get('name', sub.get('email', '?'))}: {sub.get('status', '?')}"
+                    for sub in submitters
+                )
+                lines.append(f"#{s.get('id')} — {status} | {signer_status}")
+            return "Signature requests:\n" + "\n".join(lines)
 
         elif name == "schedule_task":
             task_id = memory.create_scheduled_task(

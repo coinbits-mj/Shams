@@ -53,6 +53,10 @@ GITHUB_REPOS = {
     "leo": "leo-health-coach",
 }
 
+# DocuSeal (self-hosted e-signatures)
+DOCUSEAL_API_URL = os.environ.get("DOCUSEAL_API_URL", "")
+DOCUSEAL_API_TOKEN = os.environ.get("DOCUSEAL_API_TOKEN", "")
+
 # Resend (email for magic links)
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "shams@updates.qcitycoffee.com")

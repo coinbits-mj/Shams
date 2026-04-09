@@ -20,6 +20,7 @@ import Conversations from './pages/Conversations';
 import Actions from './pages/Actions';
 import Inbox from './pages/Inbox';
 import Settings from './pages/Settings';
+import Signatures from './pages/Signatures';
 import ToastProvider from './components/ToastProvider';
 
 function ProtectedRoute({ children }) {
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="delegations" element={<Delegations />} />
           <Route path="mercury" element={<Mercury />} />
           <Route path="integrations" element={<Integrations />} />
+          <Route path="signatures" element={<Signatures />} />
           <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
