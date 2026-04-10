@@ -327,6 +327,38 @@ def health():
     return jsonify({"status": "healthy", "service": "shams"}), 200
 
 
+@app.route("/telegram/webhook", methods=["POST"])
+def telegram_webhook():
+    """Receive Telegram updates via webhook (replaces polling)."""
+    update = request.get_json(silent=True) or {}
+
+    # Handle callback queries (button presses)
+    callback = update.get("callback_query")
+    if callback:
+        try:
+            _handle_callback(callback)
+        except Exception as e:
+            logger.error(f"Webhook callback error: {e}", exc_info=True)
+        return jsonify({"ok": True})
+
+    # Handle messages
+    msg = update.get("message")
+    if not msg:
+        return jsonify({"ok": True})
+
+    chat_id = str(msg["chat"]["id"])
+    if config.TELEGRAM_CHAT_ID and chat_id != config.TELEGRAM_CHAT_ID:
+        return jsonify({"ok": True})
+
+    try:
+        process_message(msg, chat_id)
+    except Exception as e:
+        logger.error(f"Webhook process error: {e}", exc_info=True)
+        send_telegram(chat_id, f"Error: {e}")
+
+    return jsonify({"ok": True})
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     """Direct chat endpoint for testing without Telegram."""
@@ -810,10 +842,22 @@ if __name__ == "__main__":
     # Load dynamic tasks from database
     _load_dynamic_tasks()
 
-    # Telegram polling in background thread
+    # Telegram: register webhook (replaces polling — avoids 409 conflicts)
     if config.TELEGRAM_BOT_TOKEN:
-        t = threading.Thread(target=telegram_polling, daemon=True)
-        t.start()
+        try:
+            base_url = os.environ.get("APP_URL", "https://app.myshams.ai")
+            webhook_url = f"{base_url}/telegram/webhook"
+            r = requests.post(
+                f"{TG_BASE}/setWebhook",
+                json={"url": webhook_url, "allowed_updates": ["message", "callback_query"]},
+                timeout=10,
+            )
+            if r.ok:
+                logger.info(f"Telegram webhook registered: {webhook_url}")
+            else:
+                logger.error(f"Webhook registration failed: {r.text}")
+        except Exception as e:
+            logger.error(f"Webhook setup error: {e}")
     else:
         logger.warning("TELEGRAM_BOT_TOKEN not set — Telegram disabled")
 
