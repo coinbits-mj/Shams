@@ -373,6 +373,67 @@ def send_evening_briefing():
 
 # ── Telegram callback handler ───────────────────────────────────────────────
 
+def _ack_callback(cb_id: str, text: str = "Done"):
+    requests.post(f"{TG_BASE}/answerCallbackQuery", json={
+        "callback_query_id": cb_id, "text": text,
+    }, timeout=10)
+
+
+def _handle_email_action(action_type: str, triage_id: int, cb_id: str, chat_id: str):
+    """Handle inbox zero email actions from Telegram."""
+    import google_client
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT * FROM shams_email_triage WHERE id = %s", (triage_id,))
+        email = cur.fetchone()
+
+    if not email:
+        _ack_callback(cb_id, "Email not found")
+        return
+
+    if action_type == "earchive":
+        success = google_client.archive_email(email["account"], email["message_id"])
+        if success:
+            memory.mark_email_archived(triage_id)
+            memory.log_activity("shams", "email_archived", f"Archived: {email['subject']}")
+            _ack_callback(cb_id, "Archived")
+            send_telegram(chat_id, f"Archived: {email['subject']}")
+        else:
+            _ack_callback(cb_id, "Archive failed")
+
+    elif action_type == "estar":
+        success = google_client.star_email(email["account"], email["message_id"])
+        if success:
+            memory.log_activity("shams", "email_starred", f"Starred: {email['subject']}")
+            _ack_callback(cb_id, "Starred")
+            send_telegram(chat_id, f"Starred: {email['subject']}")
+        else:
+            _ack_callback(cb_id, "Star failed")
+
+    elif action_type == "esnooze":
+        memory.log_activity("shams", "email_snoozed", f"Snoozed: {email['subject']}")
+        _ack_callback(cb_id, "Snoozed for 4 hours")
+        send_telegram(chat_id, f"Snoozed: {email['subject']}")
+
+    elif action_type == "edraft":
+        if email.get("draft_reply"):
+            success = google_client.create_draft_reply(email["account"], email["message_id"], email["draft_reply"])
+            if success:
+                memory.log_activity("shams", "draft_created", f"Draft created for: {email['subject']}")
+                _ack_callback(cb_id, "Draft saved to Gmail")
+                send_telegram(chat_id, f"Draft saved in Gmail. Open Gmail to review and send.\nSubject: {email['subject']}")
+            else:
+                _ack_callback(cb_id, "Draft failed")
+        else:
+            _ack_callback(cb_id, "No draft available")
+
+    elif action_type == "edelegate":
+        memory.log_activity("wakil", "email_delegated", f"Email routed to Wakil: {email['subject']}")
+        _ack_callback(cb_id, "Routed to Wakil")
+        send_telegram(chat_id, f"Routed to Wakil: {email['subject']}")
+
+
 def _handle_callback(callback):
     """Handle inline button presses from Telegram."""
     cb_data = callback.get("data", "")
@@ -387,6 +448,11 @@ def _handle_callback(callback):
     try:
         action_id = int(action_id_str)
     except ValueError:
+        return
+
+    # Email actions (earchive, estar, esnooze, edraft, edelegate)
+    if action_type.startswith("e"):
+        _handle_email_action(action_type, action_id, cb_id, chat_id)
         return
 
     a = memory.get_action(action_id)
@@ -579,7 +645,7 @@ def scheduled_inbox_triage():
             if draft.upper() == "NONE":
                 draft = ""
 
-            memory.save_triage_result(
+            triage_id = memory.save_triage_result(
                 account=email["account"], message_id=msg_id,
                 from_addr=email["from"], subject=email["subject"],
                 snippet=email["snippet"], priority=priority,
@@ -587,12 +653,25 @@ def scheduled_inbox_triage():
             )
 
             if priority == "P1":
-                p1_emails.append(f"[{email['account']}] {email['subject']} — {action}")
+                p1_emails.append((triage_id, email, action, draft))
 
-        # P1 → immediate Telegram notification
+        # P1 → immediate Telegram notification with action buttons
         if p1_emails and config.TELEGRAM_CHAT_ID:
-            msg = "🔴 **P1 EMAIL ALERT**\n\n" + "\n".join(p1_emails)
-            send_telegram(config.TELEGRAM_CHAT_ID, msg)
+            for triage_id, email, action, draft in p1_emails:
+                msg = (
+                    f"🔴 P1 EMAIL\n\n"
+                    f"From: {email['from']}\n"
+                    f"[{email['account']}] {email['subject']}\n\n"
+                    f"Action: {action}"
+                )
+                buttons = [
+                    {"text": "Archive", "callback_data": f"earchive:{triage_id}"},
+                    {"text": "Star", "callback_data": f"estar:{triage_id}"},
+                    {"text": "Snooze", "callback_data": f"esnooze:{triage_id}"},
+                ]
+                if draft:
+                    buttons.insert(0, {"text": "Draft Reply", "callback_data": f"edraft:{triage_id}"})
+                send_telegram_with_buttons(config.TELEGRAM_CHAT_ID, msg, buttons)
 
     except Exception as e:
         logger.error(f"Scheduled inbox triage error: {e}", exc_info=True)

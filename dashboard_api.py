@@ -740,7 +740,7 @@ def google_oauth_start():
 
     base_url = os.environ.get("APP_URL", request.host_url.rstrip("/"))
     redirect_uri = f"{base_url}/api/integrations/google/callback"
-    scopes = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly"
+    scopes = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/calendar.readonly"
 
     auth_url = (
         f"https://accounts.google.com/o/oauth2/v2/auth?"
@@ -1669,8 +1669,70 @@ def get_inbox():
 @api.route("/inbox/<int:triage_id>/archive", methods=["POST"])
 @require_auth
 def archive_email(triage_id):
+    """Archive in DB AND in Gmail."""
+    import google_client
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT account, message_id, subject FROM shams_email_triage WHERE id = %s", (triage_id,))
+        e = cur.fetchone()
+    if e:
+        google_client.archive_email(e["account"], e["message_id"])
+        memory.log_activity("shams", "email_archived", f"Archived: {e['subject']}")
     memory.mark_email_archived(triage_id)
     return jsonify({"ok": True})
+
+
+@api.route("/inbox/<int:triage_id>/star", methods=["POST"])
+@require_auth
+def star_email(triage_id):
+    import google_client
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT account, message_id, subject FROM shams_email_triage WHERE id = %s", (triage_id,))
+        e = cur.fetchone()
+    if e:
+        google_client.star_email(e["account"], e["message_id"])
+        memory.log_activity("shams", "email_starred", f"Starred: {e['subject']}")
+    return jsonify({"ok": True})
+
+
+@api.route("/inbox/<int:triage_id>/draft", methods=["POST"])
+@require_auth
+def draft_reply(triage_id):
+    """Create a draft reply in Gmail."""
+    import google_client
+    data = request.get_json(silent=True) or {}
+    body = data.get("body", "")
+    from config import DATABASE_URL
+    import psycopg2, psycopg2.extras
+    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT account, message_id, subject, draft_reply FROM shams_email_triage WHERE id = %s", (triage_id,))
+        e = cur.fetchone()
+    if not e:
+        return jsonify({"error": "not found"}), 404
+    body = body or e.get("draft_reply") or ""
+    if not body:
+        return jsonify({"error": "no body"}), 400
+    result = google_client.create_draft_reply(e["account"], e["message_id"], body)
+    if result:
+        memory.log_activity("shams", "draft_created", f"Draft created: {e['subject']}")
+        return jsonify({"ok": True, "draft_id": result.get("id")})
+    return jsonify({"error": "draft failed"}), 500
+
+
+@api.route("/inbox/zero/next", methods=["GET"])
+@require_auth
+def inbox_zero_next():
+    """Get the next email for inbox zero session — highest priority unarchived."""
+    emails = memory.get_triaged_emails(archived=False, limit=1)
+    if not emails:
+        return jsonify({"done": True})
+    e = dict(emails[0])
+    if e.get("triaged_at"):
+        e["triaged_at"] = e["triaged_at"].isoformat()
+    return jsonify({"done": False, "email": e})
 
 
 @api.route("/inbox/batch-archive", methods=["POST"])

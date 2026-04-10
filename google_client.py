@@ -184,6 +184,87 @@ def get_email_body(account_key: str, message_id: str) -> str:
     return body[:5000] if body else data.get("snippet", "No body text found.")
 
 
+# ── Gmail Actions (modify scope) ────────────────────────────────────────────
+
+def archive_email(account_key: str, message_id: str) -> bool:
+    """Remove INBOX label from a message (archives it)."""
+    token = _get_access_token(account_key)
+    if not token:
+        return False
+    r = requests.post(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify",
+        headers=_gmail_headers(token),
+        json={"removeLabelIds": ["INBOX"]},
+        timeout=15,
+    )
+    return r.ok
+
+
+def mark_read(account_key: str, message_id: str) -> bool:
+    """Remove UNREAD label."""
+    token = _get_access_token(account_key)
+    if not token:
+        return False
+    r = requests.post(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify",
+        headers=_gmail_headers(token),
+        json={"removeLabelIds": ["UNREAD"]},
+        timeout=15,
+    )
+    return r.ok
+
+
+def star_email(account_key: str, message_id: str) -> bool:
+    """Add STARRED label."""
+    token = _get_access_token(account_key)
+    if not token:
+        return False
+    r = requests.post(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/modify",
+        headers=_gmail_headers(token),
+        json={"addLabelIds": ["STARRED"]},
+        timeout=15,
+    )
+    return r.ok
+
+
+def create_draft_reply(account_key: str, message_id: str, body: str) -> dict | None:
+    """Create a draft reply to a message."""
+    import base64
+    token = _get_access_token(account_key)
+    if not token:
+        return None
+
+    # Get original message for headers
+    r = requests.get(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+        headers=_gmail_headers(token),
+        params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Message-ID", "References"]},
+        timeout=15,
+    )
+    if not r.ok:
+        return None
+    original = r.json()
+    headers = {h["name"]: h["value"] for h in original.get("payload", {}).get("headers", [])}
+    thread_id = original.get("threadId")
+
+    to = headers.get("From", "")
+    subject = headers.get("Subject", "")
+    if not subject.lower().startswith("re:"):
+        subject = "Re: " + subject
+
+    raw_message = f"To: {to}\r\nSubject: {subject}\r\nIn-Reply-To: {headers.get('Message-ID', '')}\r\nReferences: {headers.get('References', '')} {headers.get('Message-ID', '')}\r\n\r\n{body}"
+    encoded = base64.urlsafe_b64encode(raw_message.encode()).decode()
+
+    r = requests.post(
+        "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+        headers=_gmail_headers(token),
+        json={"message": {"raw": encoded, "threadId": thread_id}},
+        timeout=15,
+    )
+    return r.json() if r.ok else None
+
+
 # ── Google Calendar ──────────────────────────────────────────────────────────
 
 def get_todays_events() -> list[dict]:
