@@ -335,6 +335,7 @@ def telegram_webhook():
     # Handle callback queries (button presses)
     callback = update.get("callback_query")
     if callback:
+        logger.info(f"Telegram CALLBACK received: {callback.get('data')}")
         try:
             _handle_callback(callback)
         except Exception as e:
