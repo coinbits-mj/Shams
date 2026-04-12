@@ -1,26 +1,22 @@
-"""Agent registry — defines all agents, their personas, tools, and knowledge."""
+"""Agent registry — defines 4 agents, builds prompts, calls specialists."""
 
 from __future__ import annotations
 
 import json
 import logging
 import pathlib
-import anthropic
-import concurrent.futures
-from config import ANTHROPIC_API_KEY
 
 logger = logging.getLogger(__name__)
 
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+CONTEXT_DIR = pathlib.Path(__file__).resolve().parent.parent / "context"
 
-AGENTS_DIR = pathlib.Path(__file__).parent
-CONTEXT_DIR = pathlib.Path(__file__).parent.parent / "context"
+# ---------------------------------------------------------------------------
+# Agent definitions
+# ---------------------------------------------------------------------------
 
-# Agent definitions — each agent has a persona, model, and knowledge files
-AGENT_DEFS = {
+AGENTS = {
     "shams": {
         "role": "Chief of Staff & Orchestrator",
-        "model": "claude-sonnet-4-20250514",
         "persona_file": "shams_system_prompt.md",
         "knowledge_files": [
             "shams_knowledge_qcc_overview.md",
@@ -29,23 +25,16 @@ AGENT_DEFS = {
         ],
         "color": "#f59e0b",
     },
-    "rumi": {
-        "role": "QCC Operations Intelligence",
-        "model": "claude-sonnet-4-20250514",
-        "persona_file": "rumi_persona.md",
-        "knowledge_files": ["shams_knowledge_qcc_overview.md"],
+    "ops": {
+        "role": "Operations, Research & Technical Agent",
+        "persona_file": "ops.md",
+        "knowledge_files": [
+            "shams_knowledge_qcc_overview.md",
+        ],
         "color": "#06b6d4",
-    },
-    "leo": {
-        "role": "Health & Performance Coach",
-        "model": "claude-sonnet-4-20250514",
-        "persona_file": "leo_persona.md",
-        "knowledge_files": ["shams_knowledge_personal.md"],
-        "color": "#22c55e",
     },
     "wakil": {
         "role": "Legal Strategist & Counsel",
-        "model": "claude-sonnet-4-20250514",
         "persona_file": "wakil_persona.md",
         "knowledge_files": [
             "shams_knowledge_active_deals.md",
@@ -53,58 +42,44 @@ AGENT_DEFS = {
         ],
         "color": "#a855f7",
     },
-    "scout": {
-        "role": "Market Intelligence & Research",
-        "model": "claude-sonnet-4-20250514",
-        "persona_file": "scout_persona.md",
+    "leo": {
+        "role": "Health & Performance Coach",
+        "persona_file": "leo_persona.md",
         "knowledge_files": [
-            "shams_knowledge_qcc_overview.md",
-            "shams_knowledge_active_deals.md",
+            "shams_knowledge_personal.md",
         ],
-        "color": "#ef4444",
-    },
-    "builder": {
-        "role": "Software Engineer & Code Agent",
-        "model": "claude-sonnet-4-20250514",
-        "persona_file": "builder_persona.md",
-        "knowledge_files": [],
-        "color": "#3b82f6",
+        "color": "#22c55e",
     },
 }
 
-# Inbox is NOT a standalone agent — it's a skill Shams uses.
-# The persona file is loaded by Shams when triaging email.
-
-
-def _load_file(filename: str) -> str:
-    """Load a context file from the context/ directory or agents/ directory."""
-    for base in [CONTEXT_DIR, AGENTS_DIR]:
-        path = base / filename
-        if path.exists():
-            return path.read_text()
-    return ""
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
 
 
 def build_agent_system_prompt(agent_name: str, extra_context: str = "") -> str:
-    """Build the full system prompt for an agent."""
-    agent = AGENT_DEFS.get(agent_name)
+    """Build the full system prompt for an agent.
+
+    Loads persona + knowledge files from context/ ON DEMAND.
+    """
+    agent = AGENTS.get(agent_name)
     if not agent:
         return f"You are {agent_name}."
 
     parts = []
 
     # Persona
-    persona = _load_file(agent["persona_file"])
-    if persona:
-        parts.append(persona)
+    persona_path = CONTEXT_DIR / agent["persona_file"]
+    if persona_path.exists():
+        parts.append(persona_path.read_text())
     else:
         parts.append(f"You are {agent_name}, {agent['role']}.")
 
-    # Knowledge base
+    # Knowledge files
     for kf in agent.get("knowledge_files", []):
-        content = _load_file(kf)
-        if content:
-            parts.append(f"\n---\n{content}")
+        kf_path = CONTEXT_DIR / kf
+        if kf_path.exists():
+            parts.append(f"\n---\n{kf_path.read_text()}")
 
     # Extra context (live data, memory, etc.)
     if extra_context:
@@ -113,68 +88,87 @@ def build_agent_system_prompt(agent_name: str, extra_context: str = "") -> str:
     return "\n\n".join(parts)
 
 
-def call_agent(agent_name: str, message: str, history: list = None,
-               tools: list = None, extra_context: str = "", max_tokens: int = 2048) -> str:
-    """Call a specific agent with a message and optional conversation history."""
-    agent = AGENT_DEFS.get(agent_name)
+# ---------------------------------------------------------------------------
+# Agent caller — runs a tool-use loop with scoped tools
+# ---------------------------------------------------------------------------
+
+
+def call_agent(
+    agent_name: str,
+    message: str,
+    history: list | None = None,
+    extra_context: str = "",
+) -> str:
+    """Call a specialist agent with scoped tools. Runs a tool-use loop (max 5 iterations)."""
+    import anthropic
+    from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
+    from tools.registry import get_tool_definitions, execute
+
+    agent = AGENTS.get(agent_name)
     if not agent:
         return f"Agent '{agent_name}' not found."
 
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     system = build_agent_system_prompt(agent_name, extra_context)
+
+    # Shams gets ALL tools (agent=None), specialists get scoped tools
+    tool_scope = None if agent_name == "shams" else agent_name
+    tools = get_tool_definitions(agent=tool_scope)
 
     messages = []
     if history:
         messages.extend(history)
     messages.append({"role": "user", "content": message})
 
-    kwargs = {
-        "model": agent.get("model", "claude-sonnet-4-20250514"),
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": messages,
-    }
-    if tools:
-        kwargs["tools"] = tools
+    for _iteration in range(5):
+        try:
+            kwargs = {
+                "model": CLAUDE_MODEL,
+                "max_tokens": 4096,
+                "system": system,
+                "messages": messages,
+            }
+            if tools:
+                kwargs["tools"] = tools
 
-    try:
-        response = client.messages.create(**kwargs)
+            response = client.messages.create(**kwargs)
+        except Exception as e:
+            logger.error("Agent %s API error: %s", agent_name, e)
+            return f"Error from {agent_name}: {e}"
 
-        # Handle tool use loop
-        if response.stop_reason == "tool_use" and tools:
-            # Return raw response for caller to handle tools
-            return response
+        # If no tool use, extract text and return
+        if response.stop_reason != "tool_use":
+            text_parts = [b.text for b in response.content if b.type == "text"]
+            return "\n".join(text_parts)
 
-        text_parts = [b.text for b in response.content if b.type == "text"]
-        return "\n".join(text_parts)
+        # Process tool calls
+        messages.append({"role": "assistant", "content": response.content})
 
-    except Exception as e:
-        logger.error(f"Agent {agent_name} error: {e}")
-        return f"Error from {agent_name}: {e}"
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = execute(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result) if not isinstance(result, str) else result,
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    # Exhausted iterations — return whatever text we have
+    text_parts = [b.text for b in response.content if b.type == "text"]
+    return "\n".join(text_parts) if text_parts else f"{agent_name} reached max tool iterations."
 
 
-def call_agents_parallel(agent_names: list, message: str, extra_contexts: dict = None) -> dict:
-    """Call multiple agents in parallel. Returns {agent_name: response}."""
-    extra_contexts = extra_contexts or {}
-    results = {}
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(agent_names)) as executor:
-        futures = {
-            executor.submit(call_agent, name, message, extra_context=extra_contexts.get(name, "")): name
-            for name in agent_names
-        }
-        for future in concurrent.futures.as_completed(futures):
-            name = futures[future]
-            try:
-                results[name] = future.result()
-            except Exception as e:
-                results[name] = f"Error: {e}"
-
-    return results
+# ---------------------------------------------------------------------------
+# List agents (for dashboard)
+# ---------------------------------------------------------------------------
 
 
 def list_agents() -> list[dict]:
-    """List all available agents."""
+    """Return agent info for the dashboard."""
     return [
         {"name": name, "role": agent["role"], "color": agent["color"]}
-        for name, agent in AGENT_DEFS.items()
+        for name, agent in AGENTS.items()
     ]
