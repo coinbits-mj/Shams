@@ -4,7 +4,6 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 
-import psycopg2
 from psycopg2.pool import ThreadedConnectionPool
 
 from config import DATABASE_URL
