@@ -1,7 +1,10 @@
 # tests/test_db.py
 from __future__ import annotations
 
+import pytest
 import db
+
+pytestmark = pytest.mark.usefixtures("setup_db")
 
 def test_get_conn_returns_connection():
     with db.get_conn() as conn:

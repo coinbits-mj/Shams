@@ -6,9 +6,9 @@ import pytest
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", os.environ.get("DATABASE_URL", ""))
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def setup_db():
-    """Ensure tables exist before running tests."""
+    """Ensure tables exist before running tests that need the DB."""
     if not TEST_DATABASE_URL:
         pytest.skip("No DATABASE_URL set")
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
