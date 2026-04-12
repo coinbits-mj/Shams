@@ -12,7 +12,7 @@ import memory
 import rumi_client
 import leo_client
 import mercury_client
-from agents.registry import AGENT_DEFS, build_agent_system_prompt
+from agents.registry import AGENTS, build_agent_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +248,7 @@ def _get_agent_response(agent_name: str, user_message: str, history: list, is_te
     system = build_agent_system_prompt(agent_name, context) + _get_instruction(agent_name, user_message, is_team_round2=is_team_round2)
 
     try:
-        agent = AGENT_DEFS.get(agent_name, {})
+        agent = AGENTS.get(agent_name, {})
         kwargs = {
             "model": agent.get("model", "claude-sonnet-4-20250514"),
             "max_tokens": 600,
