@@ -30,12 +30,8 @@ app.secret_key = config.FLASK_SECRET_KEY
 
 # ── Dashboard API ────────────────────────────────────────────────────────────
 
-try:
-    from api import register_blueprints
-    register_blueprints(app)
-except ImportError:
-    from dashboard_api import api as dashboard_blueprint
-    app.register_blueprint(dashboard_blueprint)
+from api import register_blueprints
+register_blueprints(app)
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
