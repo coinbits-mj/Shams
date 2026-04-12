@@ -13,7 +13,7 @@ def setup_db():
         pytest.skip("No DATABASE_URL set")
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     import db
-    db.init_pool()
+    db.init_pool(dsn=TEST_DATABASE_URL)
     import memory
     memory.ensure_tables()
     yield

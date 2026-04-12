@@ -12,11 +12,11 @@ log = logging.getLogger(__name__)
 
 _pool: ThreadedConnectionPool | None = None
 
-def init_pool(minconn: int = 2, maxconn: int = 10) -> None:
+def init_pool(minconn: int = 2, maxconn: int = 10, dsn: str | None = None) -> None:
     global _pool
     if _pool is not None:
         return
-    _pool = ThreadedConnectionPool(minconn=minconn, maxconn=maxconn, dsn=DATABASE_URL)
+    _pool = ThreadedConnectionPool(minconn=minconn, maxconn=maxconn, dsn=dsn or DATABASE_URL)
     log.info("Connection pool initialized (min=%d, max=%d)", minconn, maxconn)
 
 def close_pool() -> None:

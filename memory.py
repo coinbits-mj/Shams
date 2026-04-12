@@ -566,7 +566,7 @@ def link_mission_to_project(mission_id: int, project_id: int,
 def create_deal(title: str, deal_type: str = "acquisition", stage: str = "lead",
                 value: float = 0, contact: str = "", source: str = "",
                 location: str = "", next_action: str = "", deadline: str | None = None,
-                score: int = 0, notes: str = "", assigned_agent: str = "scout") -> int:
+                score: int = 0, notes: str = "", assigned_agent: str = "wakil") -> int:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}deals (title, deal_type, stage, value, contact, source, location, "

@@ -129,7 +129,7 @@ def execute_action(action_id):
             )
             result = f"PR #{pr['number']} created: {pr['url']}"
             memory.update_action_status(action_id, "completed", result)
-            memory.log_activity("builder", "action_completed", f"Action #{action_id}: {result}")
+            memory.log_activity("ops", "action_completed", f"Action #{action_id}: {result}")
             memory.create_notification("action_completed", f"PR created: {payload['title']}", result, "action", action_id)
             _auto_advance_mission(a)
             return jsonify({"ok": True, "result": result, "pr": pr})
