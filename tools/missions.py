@@ -87,7 +87,7 @@ def schedule_task(name: str, cron_expression: str, prompt: str) -> str:
     )
     # Register with live scheduler
     try:
-        from app import register_dynamic_task
+        from scheduler import register_dynamic_task
         register_dynamic_task(task_id, cron_expression, prompt)
     except Exception as e:
         logger.warning(f"Could not register task live (will load on restart): {e}")
@@ -131,7 +131,7 @@ def cancel_scheduled_task(task_id: int) -> str:
 
     memory.update_scheduled_task(task_id, enabled=False)
     try:
-        from app import remove_dynamic_task
+        from scheduler import remove_dynamic_task
         remove_dynamic_task(task_id)
     except Exception:
         pass

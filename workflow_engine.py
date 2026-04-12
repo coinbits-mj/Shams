@@ -28,7 +28,7 @@ def run_next_step(workflow_id: int):
         try:
             import config
             if config.TELEGRAM_CHAT_ID:
-                from app import send_telegram
+                from telegram import send_telegram
                 send_telegram(config.TELEGRAM_CHAT_ID,
                     f"Workflow complete: {wf['title']}\n\nAll {len(wf.get('steps', []))} steps finished.")
         except Exception:
@@ -70,7 +70,7 @@ def run_next_step(workflow_id: int):
         try:
             import config
             if config.TELEGRAM_CHAT_ID:
-                from app import send_telegram_with_buttons
+                from telegram import send_telegram_with_buttons
                 send_telegram_with_buttons(config.TELEGRAM_CHAT_ID,
                     f"Workflow: {wf['title']}\nStep {step_num}: {instruction}\n\nApprove to continue:",
                     [

@@ -346,7 +346,7 @@ def _process_uploaded_files(req) -> tuple:
                 memory.save_file(fname, "photo", mime, len(file_bytes),
                                  summary=f"Uploaded via dashboard: {fname}")
             elif mime == "application/pdf":
-                from app import extract_document_text
+                from telegram import extract_document_text
                 text = extract_document_text(file_bytes, fname)
                 doc_text += f"\n\n[Document: {fname}]\n{text}"
                 memory.save_file(fname, "pdf", mime, len(file_bytes),
@@ -354,7 +354,7 @@ def _process_uploaded_files(req) -> tuple:
                                  summary=f"Uploaded via dashboard: {fname}")
             else:
                 # Try text extraction for other docs
-                from app import extract_document_text
+                from telegram import extract_document_text
                 text = extract_document_text(file_bytes, fname)
                 doc_text += f"\n\n[Document: {fname}]\n{text}"
                 memory.save_file(fname, "document", mime, len(file_bytes),
@@ -1246,7 +1246,7 @@ def upload_mission_file(mission_id):
         transcript = ""
         if mime == "application/pdf":
             try:
-                from app import extract_document_text
+                from telegram import extract_document_text
                 transcript = extract_document_text(file_bytes, fname)
             except Exception:
                 pass
@@ -1951,13 +1951,13 @@ def update_scheduled_task(task_id):
     memory.update_scheduled_task(task_id, **{k: v for k, v in data.items() if k in ("name", "cron_expression", "prompt", "enabled")})
     if data.get("enabled") is False:
         try:
-            from app import remove_dynamic_task
+            from scheduler import remove_dynamic_task
             remove_dynamic_task(task_id)
         except Exception:
             pass
     elif data.get("enabled") is True and data.get("cron_expression"):
         try:
-            from app import register_dynamic_task
+            from scheduler import register_dynamic_task
             register_dynamic_task(task_id, data["cron_expression"], data.get("prompt", ""))
         except Exception:
             pass
@@ -1969,7 +1969,7 @@ def update_scheduled_task(task_id):
 def delete_scheduled_task(task_id):
     memory.delete_scheduled_task(task_id)
     try:
-        from app import remove_dynamic_task
+        from scheduler import remove_dynamic_task
         remove_dynamic_task(task_id)
     except Exception:
         pass
@@ -1979,7 +1979,7 @@ def delete_scheduled_task(task_id):
 @api.route("/scheduled-tasks/<int:task_id>/run", methods=["POST"])
 @require_auth
 def run_scheduled_task(task_id):
-    from app import _run_dynamic_task
+    from scheduler import _run_dynamic_task
     _run_dynamic_task(task_id)
     return jsonify({"ok": True})
 

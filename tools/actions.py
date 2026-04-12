@@ -53,7 +53,7 @@ def propose_action(action_type: str, title: str, description: str = "", payload:
     try:
         import config as _cfg
         if _cfg.TELEGRAM_CHAT_ID:
-            from app import send_telegram_with_buttons
+            from telegram import send_telegram_with_buttons
             send_telegram_with_buttons(_cfg.TELEGRAM_CHAT_ID,
                 f"Action #{action_id}: {title}\n{description}",
                 [
