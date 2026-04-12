@@ -152,6 +152,38 @@ def process_message(msg: dict, chat_id: str):
         if text == "/start":
             send_telegram(chat_id, "Shams is here. Talk to me.")
             return
+
+        if text.startswith("/movie "):
+            import media_client
+            parts = text[len("/movie "):].strip().rsplit(" ", 1)
+            if parts and parts[-1] in ("1080p", "2160p"):
+                title, quality = " ".join(parts[:-1]) if len(parts) > 1 else parts[0], parts[-1]
+            else:
+                title, quality = text[len("/movie "):].strip(), "1080p"
+            try:
+                result = media_client.add_movie(title=title, quality=quality)
+                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+            except Exception as e:
+                send_telegram(chat_id, f"Failed to add '{title}': {e}")
+            return
+
+        if text.startswith("/tv "):
+            import media_client, re
+            rest = text[len("/tv "):].strip()
+            m = re.match(r"^(?P<title>.+?)(?:\s+s(?P<season>\d+))?(?:\s+(?P<quality>1080p|2160p))?$", rest, re.I)
+            if not m:
+                send_telegram(chat_id, "Usage: /tv <title> [s<N>] [1080p|2160p]")
+                return
+            title = m.group("title").strip()
+            season = int(m.group("season")) if m.group("season") else None
+            quality = m.group("quality") or "1080p"
+            try:
+                result = media_client.add_tv(title=title, season=season, quality=quality)
+                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+            except Exception as e:
+                send_telegram(chat_id, f"Failed to add '{title}': {e}")
+            return
+
         logger.info(f"Message from MJ: {text[:100]}")
         reply = claude_client.chat(text)
         send_telegram(chat_id, reply)
