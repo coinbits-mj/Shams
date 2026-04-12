@@ -3,22 +3,17 @@
 from __future__ import annotations
 
 import json
-import psycopg2
 import psycopg2.extras
 from datetime import datetime, timezone
-from config import DATABASE_URL
+from db import get_conn
 
 P = "shams_"  # table prefix
-
-
-def _conn():
-    return psycopg2.connect(DATABASE_URL)
 
 
 # ── Conversations ────────────────────────────────────────────────────────────
 
 def save_message(role: str, content: str, metadata: dict | None = None):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}conversations (role, content, metadata) VALUES (%s, %s, %s)",
             (role, content, json.dumps(metadata or {})),
@@ -26,7 +21,7 @@ def save_message(role: str, content: str, metadata: dict | None = None):
 
 
 def get_recent_messages(limit: int = 50) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT role, content, metadata, timestamp FROM {P}conversations "
             f"ORDER BY timestamp DESC LIMIT %s",
@@ -39,7 +34,7 @@ def get_recent_messages(limit: int = 50) -> list[dict]:
 # ── Key-Value Memory ─────────────────────────────────────────────────────────
 
 def remember(key: str, value: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}memory (key, value, updated_at) VALUES (%s, %s, NOW()) "
             f"ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
@@ -48,14 +43,14 @@ def remember(key: str, value: str):
 
 
 def recall(key: str) -> str | None:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT value FROM {P}memory WHERE key = %s", (key,))
         row = cur.fetchone()
     return row[0] if row else None
 
 
 def recall_all() -> dict[str, str]:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT key, value FROM {P}memory ORDER BY key")
         return {r[0]: r[1] for r in cur.fetchall()}
 
@@ -63,7 +58,7 @@ def recall_all() -> dict[str, str]:
 # ── Open Loops ───────────────────────────────────────────────────────────────
 
 def add_open_loop(title: str, context: str = "") -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}open_loops (title, context) VALUES (%s, %s) RETURNING id",
             (title, context),
@@ -72,7 +67,7 @@ def add_open_loop(title: str, context: str = "") -> int:
 
 
 def close_loop(loop_id: int, status: str = "done"):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}open_loops SET status = %s, updated_at = NOW() WHERE id = %s",
             (status, loop_id),
@@ -80,7 +75,7 @@ def close_loop(loop_id: int, status: str = "done"):
 
 
 def get_open_loops() -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT id, title, context, created_at FROM {P}open_loops WHERE status = 'open' ORDER BY created_at"
         )
@@ -90,7 +85,7 @@ def get_open_loops() -> list[dict]:
 # ── Decisions ────────────────────────────────────────────────────────────────
 
 def log_decision(summary: str, reasoning: str = "", outcome: str = ""):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}decisions (summary, reasoning, outcome) VALUES (%s, %s, %s)",
             (summary, reasoning, outcome),
@@ -98,7 +93,7 @@ def log_decision(summary: str, reasoning: str = "", outcome: str = ""):
 
 
 def get_recent_decisions(limit: int = 10) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT summary, reasoning, outcome, created_at FROM {P}decisions "
             f"ORDER BY created_at DESC LIMIT %s",
@@ -110,7 +105,7 @@ def get_recent_decisions(limit: int = 10) -> list[dict]:
 # ── Briefings ────────────────────────────────────────────────────────────────
 
 def save_briefing(briefing_type: str, content: str, channel: str = "whatsapp"):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}briefings (type, content, delivered_at, channel) VALUES (%s, %s, NOW(), %s)",
             (briefing_type, content, channel),
@@ -118,7 +113,7 @@ def save_briefing(briefing_type: str, content: str, channel: str = "whatsapp"):
 
 
 def get_last_briefing(briefing_type: str) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT type, content, delivered_at, channel FROM {P}briefings "
             f"WHERE type = %s ORDER BY delivered_at DESC LIMIT 1",
@@ -130,7 +125,7 @@ def get_last_briefing(briefing_type: str) -> dict | None:
 # ── Files & Folders ──────────────────────────────────────────────────────────
 
 def create_folder(name: str, parent_id: int | None = None) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}folders (name, parent_id) VALUES (%s, %s) RETURNING id",
             (name, parent_id),
@@ -139,7 +134,7 @@ def create_folder(name: str, parent_id: int | None = None) -> int:
 
 
 def get_folders(parent_id: int | None = None) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if parent_id is None:
             cur.execute(f"SELECT * FROM {P}folders WHERE parent_id IS NULL ORDER BY name")
         else:
@@ -151,7 +146,7 @@ def save_file(filename: str, file_type: str, mime_type: str = "", file_size: int
               folder_id: int | None = None, telegram_file_id: str = "",
               summary: str = "", transcript: str = "", tags: list = None,
               conversation_id: int | None = None, mission_id: int | None = None) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}files (filename, file_type, mime_type, file_size, folder_id, "
             f"telegram_file_id, summary, transcript, tags, conversation_id, mission_id) "
@@ -164,7 +159,7 @@ def save_file(filename: str, file_type: str, mime_type: str = "", file_size: int
 
 def get_files(folder_id: int | None = None, file_type: str | None = None,
               limit: int = 50) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions = []
         params = []
         if folder_id is not None:
@@ -180,7 +175,7 @@ def get_files(folder_id: int | None = None, file_type: str | None = None,
 
 
 def get_file(file_id: int) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}files WHERE id = %s", (file_id,))
         return cur.fetchone()
 
@@ -189,7 +184,7 @@ def get_file(file_id: int) -> dict | None:
 
 def create_session(email: str, token: str, hours: int = 168) -> None:
     from datetime import timedelta
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}sessions (token, email, expires_at) VALUES (%s, %s, NOW() + %s)",
             (token, email, timedelta(hours=hours)),
@@ -198,7 +193,7 @@ def create_session(email: str, token: str, hours: int = 168) -> None:
 
 def validate_session(token: str) -> str | None:
     """Returns email if valid, None otherwise."""
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT email FROM {P}sessions WHERE token = %s AND expires_at > NOW()",
             (token,),
@@ -208,13 +203,13 @@ def validate_session(token: str) -> str | None:
 
 
 def delete_session(token: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"DELETE FROM {P}sessions WHERE token = %s", (token,))
 
 
 def create_magic_link(email: str, token: str, minutes: int = 15) -> None:
     from datetime import timedelta
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}magic_links (token, email, expires_at) VALUES (%s, %s, NOW() + %s)",
             (token, email, timedelta(minutes=minutes)),
@@ -223,7 +218,7 @@ def create_magic_link(email: str, token: str, minutes: int = 15) -> None:
 
 def validate_magic_link(token: str) -> str | None:
     """Returns email if valid and unused, None otherwise. Marks as used."""
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"SELECT id, email FROM {P}magic_links WHERE token = %s AND used = FALSE AND expires_at > NOW()",
             (token,),
@@ -238,7 +233,7 @@ def validate_magic_link(token: str) -> str | None:
 # ── Group Chat ────────────────────────────────────────────────────────────────
 
 def save_group_message(agent_name: str, content: str, metadata: dict | None = None):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}group_chat (agent_name, content, metadata) VALUES (%s, %s, %s)",
             (agent_name, content, json.dumps(metadata or {})),
@@ -246,7 +241,7 @@ def save_group_message(agent_name: str, content: str, metadata: dict | None = No
 
 
 def get_group_messages(limit: int = 50) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT agent_name, content, metadata, timestamp FROM {P}group_chat "
             f"ORDER BY timestamp DESC LIMIT %s", (limit,)
@@ -257,13 +252,13 @@ def get_group_messages(limit: int = 50) -> list[dict]:
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 def get_agents() -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}agents ORDER BY name")
         return cur.fetchall()
 
 
 def update_agent_status(name: str, status: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}agents SET status = %s, last_heartbeat = NOW() WHERE name = %s",
             (status, name),
@@ -274,7 +269,7 @@ def update_agent_status(name: str, status: str):
 
 def create_mission(title: str, description: str = "", priority: str = "normal",
                    assigned_agent: str | None = None, tags: list | None = None) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         status = "assigned" if assigned_agent else "inbox"
         cur.execute(
             f"INSERT INTO {P}missions (title, description, status, priority, assigned_agent, tags) "
@@ -285,7 +280,7 @@ def create_mission(title: str, description: str = "", priority: str = "normal",
 
 
 def get_missions(status: str | None = None, agent: str | None = None) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions, params = [], []
         if status:
             conditions.append("status = %s")
@@ -301,7 +296,7 @@ def get_missions(status: str | None = None, agent: str | None = None) -> list[di
 
 
 def update_mission(mission_id: int, **kwargs):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets = ["updated_at = NOW()"]
         params = []
         for k, v in kwargs.items():
@@ -315,7 +310,7 @@ def update_mission(mission_id: int, **kwargs):
 # ── Activity Feed ────────────────────────────────────────────────────────────
 
 def log_activity(agent_name: str, event_type: str, content: str, metadata: dict | None = None):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}activity_feed (agent_name, event_type, content, metadata) VALUES (%s, %s, %s, %s)",
             (agent_name, event_type, content, json.dumps(metadata or {})),
@@ -324,7 +319,7 @@ def log_activity(agent_name: str, event_type: str, content: str, metadata: dict 
 
 def get_activity_feed(limit: int = 50, agent: str | None = None,
                       event_type: str | None = None) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions, params = [], []
         if agent:
             conditions.append("agent_name = %s")
@@ -342,7 +337,7 @@ def get_activity_feed(limit: int = 50, agent: str | None = None,
 
 def create_notification(event_type: str, title: str, detail: str = "",
                         link_type: str = "", link_id: int | None = None):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}notifications (event_type, title, detail, link_type, link_id) "
             f"VALUES (%s, %s, %s, %s, %s)",
@@ -351,7 +346,7 @@ def create_notification(event_type: str, title: str, detail: str = "",
 
 
 def get_unseen_notifications(limit: int = 20) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT * FROM {P}notifications WHERE seen = FALSE "
             f"ORDER BY created_at DESC LIMIT %s", (limit,)
@@ -362,14 +357,14 @@ def get_unseen_notifications(limit: int = 20) -> list[dict]:
 def mark_notifications_seen(ids: list[int]):
     if not ids:
         return
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}notifications SET seen = TRUE WHERE id = ANY(%s)", (ids,)
         )
 
 
 def get_notification_counts() -> dict:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT COUNT(*) FROM {P}notifications WHERE seen = FALSE")
         unseen = cur.fetchone()[0]
         cur.execute(f"SELECT COUNT(*) FROM {P}actions WHERE status = 'pending'")
@@ -390,7 +385,7 @@ def get_notification_counts() -> dict:
 def save_triage_result(account: str, message_id: str, from_addr: str, subject: str,
                        snippet: str, priority: str = "P4", routed_to: list | None = None,
                        action: str = "", draft_reply: str = "") -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}email_triage (account, message_id, from_addr, subject, snippet, "
             f"priority, routed_to, action, draft_reply) "
@@ -407,7 +402,7 @@ def save_triage_result(account: str, message_id: str, from_addr: str, subject: s
 
 def get_triaged_emails(priority: str | None = None, account: str | None = None,
                        archived: bool | None = None, limit: int = 100) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions, params = [], []
         if priority:
             conditions.append("priority = %s")
@@ -429,14 +424,14 @@ def get_triaged_emails(priority: str | None = None, account: str | None = None,
 
 
 def mark_email_archived(triage_id: int):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"UPDATE {P}email_triage SET archived = TRUE WHERE id = %s", (triage_id,))
 
 
 def batch_archive_emails(triage_ids: list[int]) -> int:
     if not triage_ids:
         return 0
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}email_triage SET archived = TRUE WHERE id = ANY(%s) RETURNING id",
             (triage_ids,),
@@ -449,7 +444,7 @@ def batch_archive_emails(triage_ids: list[int]) -> int:
 def create_action(agent_name: str, action_type: str, title: str,
                   description: str = "", payload: dict | None = None,
                   mission_id: int | None = None) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}actions (agent_name, action_type, title, description, payload, mission_id) "
             f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
@@ -460,7 +455,7 @@ def create_action(agent_name: str, action_type: str, title: str,
 
 def get_actions(status: str | None = None, agent: str | None = None,
                 limit: int = 50) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions, params = [], []
         if status:
             conditions.append("status = %s")
@@ -477,13 +472,13 @@ def get_actions(status: str | None = None, agent: str | None = None,
 
 
 def get_action(action_id: int) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}actions WHERE id = %s", (action_id,))
         return cur.fetchone()
 
 
 def update_action_status(action_id: int, status: str, result: str = ""):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         if status in ("approved", "rejected", "completed", "failed"):
             cur.execute(
                 f"UPDATE {P}actions SET status = %s, result = %s, resolved_at = NOW() WHERE id = %s",
@@ -500,7 +495,7 @@ def update_action_status(action_id: int, status: str, result: str = ""):
 
 def create_project(title: str, brief: str = "", start_date: str | None = None,
                    target_date: str | None = None, color: str = "#38bdf8") -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}projects (title, brief, start_date, target_date, color) "
             f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -510,7 +505,7 @@ def create_project(title: str, brief: str = "", start_date: str | None = None,
 
 
 def get_projects(status: str | None = None) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if status:
             cur.execute(f"SELECT * FROM {P}projects WHERE status = %s ORDER BY created_at", (status,))
         else:
@@ -519,7 +514,7 @@ def get_projects(status: str | None = None) -> list[dict]:
 
 
 def get_project_with_missions(project_id: int) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}projects WHERE id = %s", (project_id,))
         proj = cur.fetchone()
         if not proj:
@@ -536,7 +531,7 @@ def get_project_with_missions(project_id: int) -> dict | None:
 
 
 def update_project(project_id: int, **kwargs):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets = ["updated_at = NOW()"]
         params = []
         for k, v in kwargs.items():
@@ -550,7 +545,7 @@ def update_project(project_id: int, **kwargs):
 def link_mission_to_project(mission_id: int, project_id: int,
                             start_date: str | None = None, end_date: str | None = None,
                             depends_on: list | None = None):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets = ["project_id = %s"]
         params = [project_id]
         if start_date:
@@ -572,7 +567,7 @@ def create_deal(title: str, deal_type: str = "acquisition", stage: str = "lead",
                 value: float = 0, contact: str = "", source: str = "",
                 location: str = "", next_action: str = "", deadline: str | None = None,
                 score: int = 0, notes: str = "", assigned_agent: str = "scout") -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}deals (title, deal_type, stage, value, contact, source, location, "
             f"next_action, deadline, score, notes, assigned_agent) "
@@ -584,7 +579,7 @@ def create_deal(title: str, deal_type: str = "acquisition", stage: str = "lead",
 
 
 def get_deals(stage: str | None = None, limit: int = 50) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if stage:
             cur.execute(f"SELECT * FROM {P}deals WHERE stage = %s ORDER BY score DESC, updated_at DESC LIMIT %s", (stage, limit))
         else:
@@ -596,7 +591,7 @@ def get_deals(stage: str | None = None, limit: int = 50) -> list[dict]:
 
 
 def update_deal(deal_id: int, **kwargs):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets = ["updated_at = NOW()"]
         params = []
         for k, v in kwargs.items():
@@ -612,7 +607,7 @@ def update_deal(deal_id: int, **kwargs):
 
 def create_alert_rule(name: str, metric: str, condition: str, threshold: float,
                       message_template: str) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}alert_rules (name, metric, condition, threshold, message_template) "
             f"VALUES (%s, %s, %s, %s, %s) RETURNING id",
@@ -622,7 +617,7 @@ def create_alert_rule(name: str, metric: str, condition: str, threshold: float,
 
 
 def get_alert_rules(enabled_only: bool = False) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if enabled_only:
             cur.execute(f"SELECT * FROM {P}alert_rules WHERE enabled = TRUE ORDER BY created_at")
         else:
@@ -631,7 +626,7 @@ def get_alert_rules(enabled_only: bool = False) -> list[dict]:
 
 
 def update_alert_rule(rule_id: int, **kwargs):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets, params = [], []
         for k, v in kwargs.items():
             if k in ("name", "metric", "condition", "threshold", "message_template", "enabled", "last_triggered"):
@@ -647,7 +642,7 @@ def update_alert_rule(rule_id: int, **kwargs):
 
 def create_scheduled_task(name: str, cron_expression: str, prompt: str,
                           agent_name: str = "shams") -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}scheduled_tasks (name, cron_expression, prompt, agent_name) "
             f"VALUES (%s, %s, %s, %s) RETURNING id",
@@ -657,7 +652,7 @@ def create_scheduled_task(name: str, cron_expression: str, prompt: str,
 
 
 def get_scheduled_tasks(enabled_only: bool = False) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if enabled_only:
             cur.execute(f"SELECT * FROM {P}scheduled_tasks WHERE enabled = TRUE ORDER BY created_at")
         else:
@@ -666,7 +661,7 @@ def get_scheduled_tasks(enabled_only: bool = False) -> list[dict]:
 
 
 def update_scheduled_task(task_id: int, **kwargs):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         sets, params = [], []
         for k, v in kwargs.items():
             if k in ("name", "cron_expression", "prompt", "agent_name", "enabled"):
@@ -679,12 +674,12 @@ def update_scheduled_task(task_id: int, **kwargs):
 
 
 def delete_scheduled_task(task_id: int):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"DELETE FROM {P}scheduled_tasks WHERE id = %s", (task_id,))
 
 
 def mark_task_run(task_id: int, result: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}scheduled_tasks SET last_run_at = NOW(), last_result = %s WHERE id = %s",
             (result[:2000], task_id),
@@ -695,7 +690,7 @@ def mark_task_run(task_id: int, result: str):
 
 def create_workflow(title: str, description: str, steps: list[dict],
                     mission_id: int | None = None) -> int:
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}workflows (title, description, mission_id) "
             f"VALUES (%s, %s, %s) RETURNING id",
@@ -713,7 +708,7 @@ def create_workflow(title: str, description: str, steps: list[dict],
 
 
 def get_workflow(workflow_id: int) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}workflows WHERE id = %s", (workflow_id,))
         wf = cur.fetchone()
         if not wf:
@@ -728,7 +723,7 @@ def get_workflow(workflow_id: int) -> dict | None:
 
 
 def get_workflows(status: str | None = None) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         if status:
             cur.execute(f"SELECT * FROM {P}workflows WHERE status = %s ORDER BY created_at DESC", (status,))
         else:
@@ -737,7 +732,7 @@ def get_workflows(status: str | None = None) -> list[dict]:
 
 
 def get_active_workflow_step(workflow_id: int) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT * FROM {P}workflow_steps WHERE workflow_id = %s AND status = 'pending' "
             f"ORDER BY step_number LIMIT 1", (workflow_id,)
@@ -747,7 +742,7 @@ def get_active_workflow_step(workflow_id: int) -> dict | None:
 
 
 def advance_workflow_step(workflow_id: int, step_number: int, result: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         # Mark current step complete
         cur.execute(
             f"UPDATE {P}workflow_steps SET status = 'completed', output_result = %s, completed_at = NOW() "
@@ -779,7 +774,7 @@ def advance_workflow_step(workflow_id: int, step_number: int, result: str):
 
 
 def update_workflow_status(workflow_id: int, status: str):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}workflows SET status = %s, updated_at = NOW() WHERE id = %s",
             (status, workflow_id),
@@ -787,7 +782,7 @@ def update_workflow_status(workflow_id: int, status: str):
 
 
 def start_workflow_step(workflow_id: int, step_number: int):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"UPDATE {P}workflow_steps SET status = 'active', started_at = NOW() "
             f"WHERE workflow_id = %s AND step_number = %s",
@@ -798,7 +793,7 @@ def start_workflow_step(workflow_id: int, step_number: int):
 # ── Action Helpers ──────────────────────────────────────────────────────────
 
 def get_actions_for_mission(mission_id: int) -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             f"SELECT * FROM {P}actions WHERE mission_id = %s ORDER BY created_at", (mission_id,)
         )
@@ -808,13 +803,13 @@ def get_actions_for_mission(mission_id: int) -> list[dict]:
 # ── Trust Scores ────────────────────────────────────────────────────────────
 
 def get_trust_score(agent_name: str) -> dict | None:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}trust_scores WHERE agent_name = %s", (agent_name,))
         return cur.fetchone()
 
 
 def get_all_trust_scores() -> list[dict]:
-    with _conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}trust_scores ORDER BY agent_name")
         return cur.fetchall()
 
@@ -823,7 +818,7 @@ def increment_trust(agent_name: str, field: str):
     """Increment total_proposed, total_approved, or total_rejected."""
     if field not in ("total_proposed", "total_approved", "total_rejected"):
         return
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}trust_scores (agent_name, {field}) VALUES (%s, 1) "
             f"ON CONFLICT (agent_name) DO UPDATE SET {field} = {P}trust_scores.{field} + 1, "
@@ -833,7 +828,7 @@ def increment_trust(agent_name: str, field: str):
 
 
 def set_auto_approve(agent_name: str, enabled: bool):
-    with _conn() as conn, conn.cursor() as cur:
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}trust_scores (agent_name, auto_approve) VALUES (%s, %s) "
             f"ON CONFLICT (agent_name) DO UPDATE SET auto_approve = %s, updated_at = NOW()",
@@ -853,7 +848,9 @@ def should_auto_approve(agent_name: str) -> bool:
 
 def ensure_tables():
     """Run schema.sql to create tables if they don't exist."""
-    import pathlib
-    sql = pathlib.Path(__file__).parent.joinpath("schema.sql").read_text()
-    with _conn() as conn, conn.cursor() as cur:
-        cur.execute(sql)
+    from pathlib import Path
+    schema_path = Path(__file__).parent / "schema.sql"
+    if schema_path.exists():
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(schema_path.read_text())
