@@ -17,10 +17,11 @@ def register_blueprints(app: Flask) -> None:
     from api.deals import bp as deals_bp
     from api.signatures import bp as signatures_bp
     from api.money import bp as money_bp
+    from api.bridge import bp as bridge_bp
 
     for blueprint in [
         auth_bp, chat_bp, projects_bp, agents_bp, mercury_bp,
         integrations_bp, actions_bp, inbox_bp, files_bp, briefings_bp,
-        settings_bp, deals_bp, signatures_bp, money_bp,
+        settings_bp, deals_bp, signatures_bp, money_bp, bridge_bp,
     ]:
         app.register_blueprint(blueprint)
