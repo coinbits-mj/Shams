@@ -370,7 +370,7 @@ def get_notification_counts() -> dict:
         cur.execute(f"SELECT COUNT(*) FROM {P}actions WHERE status = 'pending'")
         pending_actions = cur.fetchone()[0]
         cur.execute(
-            f"SELECT COUNT(*) FROM {P}email_triage WHERE priority IN ('P1','P2') AND archived = FALSE"
+            f"SELECT COUNT(*) FROM {P}email_triage WHERE tier = 'reply' AND archived = FALSE"
         )
         inbox_urgent = cur.fetchone()[0]
     return {
@@ -383,27 +383,32 @@ def get_notification_counts() -> dict:
 # ── Email Triage ────────────────────────────────────────────────────────────
 
 def save_triage_result(account: str, message_id: str, from_addr: str, subject: str,
-                       snippet: str, priority: str = "P4", routed_to: list | None = None,
+                       snippet: str, tier: str = "archive", priority: str = "",
+                       routed_to: list | None = None,
                        action: str = "", draft_reply: str = "") -> int:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             f"INSERT INTO {P}email_triage (account, message_id, from_addr, subject, snippet, "
-            f"priority, routed_to, action, draft_reply) "
-            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            f"tier, priority, routed_to, action, draft_reply) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             f"ON CONFLICT (message_id) DO UPDATE SET "
-            f"priority = EXCLUDED.priority, routed_to = EXCLUDED.routed_to, "
+            f"tier = EXCLUDED.tier, priority = EXCLUDED.priority, routed_to = EXCLUDED.routed_to, "
             f"action = EXCLUDED.action, draft_reply = EXCLUDED.draft_reply, triaged_at = NOW() "
             f"RETURNING id",
-            (account, message_id, from_addr, subject, snippet, priority,
+            (account, message_id, from_addr, subject, snippet, tier, priority,
              routed_to or [], action, draft_reply),
         )
         return cur.fetchone()[0]
 
 
-def get_triaged_emails(priority: str | None = None, account: str | None = None,
+def get_triaged_emails(tier: str | None = None, priority: str | None = None,
+                       account: str | None = None,
                        archived: bool | None = None, limit: int = 100) -> list[dict]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         conditions, params = [], []
+        if tier:
+            conditions.append("tier = %s")
+            params.append(tier)
         if priority:
             conditions.append("priority = %s")
             params.append(priority)
@@ -417,7 +422,7 @@ def get_triaged_emails(priority: str | None = None, account: str | None = None,
         params.append(limit)
         cur.execute(
             f"SELECT * FROM {P}email_triage {where} "
-            f"ORDER BY CASE priority WHEN 'P1' THEN 0 WHEN 'P2' THEN 1 WHEN 'P3' THEN 2 ELSE 3 END, "
+            f"ORDER BY CASE tier WHEN 'reply' THEN 0 WHEN 'read' THEN 1 ELSE 2 END, "
             f"triaged_at DESC LIMIT %s", params
         )
         return cur.fetchall()
