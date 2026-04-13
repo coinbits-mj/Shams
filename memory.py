@@ -854,3 +854,49 @@ def ensure_tables():
         with get_conn() as conn:
             cur = conn.cursor()
             cur.execute(schema_path.read_text())
+
+
+# ── Overnight Runs ─────────────────────────────────────────────────────────
+
+def create_overnight_run() -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}overnight_runs (status) VALUES ('running') RETURNING id"
+        )
+        return cur.fetchone()[0]
+
+
+def update_overnight_run(run_id: int, status: str = "completed",
+                         results: dict | None = None, summary: str = ""):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}overnight_runs SET status = %s, results = %s, summary = %s, "
+            f"finished_at = NOW() WHERE id = %s",
+            (status, json.dumps(results or {}), summary, run_id),
+        )
+
+
+def get_latest_overnight_run() -> dict | None:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}overnight_runs ORDER BY started_at DESC LIMIT 1"
+        )
+        return cur.fetchone()
+
+
+# ── Standup State ──────────────────────────────────────────────────────────
+
+def get_standup_state() -> dict | None:
+    raw = recall("standup_state")
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def set_standup_state(state: dict):
+    remember("standup_state", json.dumps(state))
+
+
+def clear_standup_state():
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(f"DELETE FROM {P}memory WHERE key = 'standup_state'")
