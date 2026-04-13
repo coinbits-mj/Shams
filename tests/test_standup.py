@@ -207,3 +207,34 @@ def test_standup_callback_routing():
         idx = int(parts[1])
         assert action_type == expected_action
         assert idx == expected_idx
+
+
+def test_scout_agent_registered():
+    """Test that Scout is registered as an agent."""
+    from agents.registry import AGENTS, build_agent_system_prompt
+    assert "scout" in AGENTS
+    assert AGENTS["scout"]["role"] == "Market Intelligence & Research Agent"
+    prompt = build_agent_system_prompt("scout")
+    assert "Scout" in prompt
+
+
+def test_list_deals_tool_exists():
+    """Test that list_deals tool is registered."""
+    from tools.registry import discover_tools, get_tool_definitions
+    discover_tools()
+    all_tools = get_tool_definitions()
+    tool_names = [t["name"] for t in all_tools]
+    assert "list_deals" in tool_names
+
+
+def test_deal_tools_available_to_scout():
+    """Test that deal tools are available to scout agent."""
+    from tools.registry import discover_tools, get_tool_definitions
+    discover_tools()
+    scout_tools = get_tool_definitions(agent="scout")
+    tool_names = [t["name"] for t in scout_tools]
+    assert "create_deal" in tool_names
+    assert "update_deal" in tool_names
+    assert "list_deals" in tool_names
+    assert "web_search" in tool_names
+    assert "fetch_url" in tool_names

@@ -1,4 +1,4 @@
-"""Agent registry — defines 4 agents, builds prompts, calls specialists."""
+"""Agent registry — defines 5 agents, builds prompts, calls specialists."""
 
 from __future__ import annotations
 
@@ -49,6 +49,15 @@ AGENTS = {
             "shams_knowledge_personal.md",
         ],
         "color": "#22c55e",
+    },
+    "scout": {
+        "role": "Market Intelligence & Research Agent",
+        "persona_file": "scout_persona.md",
+        "knowledge_files": [
+            "shams_knowledge_qcc_overview.md",
+            "shams_knowledge_active_deals.md",
+        ],
+        "color": "#ef4444",
     },
 }
 

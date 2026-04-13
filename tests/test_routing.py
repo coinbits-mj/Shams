@@ -23,8 +23,8 @@ def setup_module():
 # ---------------------------------------------------------------------------
 
 
-def test_four_agents_defined():
-    assert set(AGENTS.keys()) == {"shams", "ops", "wakil", "leo"}
+def test_five_agents_defined():
+    assert set(AGENTS.keys()) == {"shams", "ops", "wakil", "leo", "scout"}
 
 
 def test_each_agent_has_required_fields():
@@ -124,11 +124,11 @@ def test_build_agent_system_prompt_unknown_agent():
 # ---------------------------------------------------------------------------
 
 
-def test_list_agents_returns_four():
+def test_list_agents_returns_five():
     agents = list_agents()
-    assert len(agents) == 4
+    assert len(agents) == 5
     names = {a["name"] for a in agents}
-    assert names == {"shams", "ops", "wakil", "leo"}
+    assert names == {"shams", "ops", "wakil", "leo", "scout"}
     for a in agents:
         assert "role" in a
         assert "color" in a

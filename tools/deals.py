@@ -7,7 +7,7 @@ from tools.registry import tool
 @tool(
     name="create_deal",
     description="Add a new deal/opportunity to the pipeline. Use when Scout finds an acquisition target, real estate listing, partnership opportunity, or any money-making prospect.",
-    agent="wakil",
+    agent=None,
     schema={
         "properties": {
             "title": {"type": "string", "description": "Deal title (e.g. 'Red House Roasters Acquisition')"},
@@ -46,7 +46,7 @@ def create_deal(title: str, deal_type: str = "acquisition", value: float = 0, co
 @tool(
     name="update_deal",
     description="Update a deal's stage, score, next action, or other details. Use to advance deals through the pipeline.",
-    agent="wakil",
+    agent=None,
     schema={
         "properties": {
             "deal_id": {"type": "integer"},
@@ -77,3 +77,32 @@ def update_deal(deal_id: int, stage: str = None, value: float = None, next_actio
     memory.update_deal(deal_id, **kwargs)
     memory.log_activity("shams", "deal_updated", f"Deal #{deal_id} → {kwargs.get('stage', 'updated')}")
     return f"Deal #{deal_id} updated."
+
+
+@tool(
+    name="list_deals",
+    description="List deals in the pipeline. Filter by stage to see what's being tracked. Use before creating deals to avoid duplicates.",
+    schema={
+        "properties": {
+            "stage": {"type": "string", "description": "Filter by stage", "enum": ["lead", "researching", "evaluating", "loi", "due_diligence", "closing", "closed", "dead"]},
+            "limit": {"type": "integer", "description": "Max deals to return (default 20)", "default": 20},
+        },
+    },
+)
+def list_deals(stage: str = None, limit: int = 20) -> str:
+    import memory
+
+    deals = memory.get_deals(stage=stage, limit=limit)
+    if not deals:
+        return "No deals in pipeline." + (f" (filtered by stage={stage})" if stage else "")
+
+    lines = []
+    for d in deals:
+        score = d.get("score", 0)
+        stage_val = d.get("stage", "?")
+        lines.append(
+            f"#{d['id']} [{stage_val}] {d['title']} — score:{score}/10"
+            + (f" ${d['value']:,.0f}" if d.get("value") else "")
+            + (f" — {d.get('location', '')}" if d.get("location") else "")
+        )
+    return f"{len(deals)} deal(s):\n" + "\n".join(lines)
