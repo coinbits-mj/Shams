@@ -65,8 +65,10 @@ RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "shams@updates.qcitycoff
 FLASK_SECRET_KEY = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
 # Scheduling
-BRIEFING_HOUR_UTC = int(os.environ.get("BRIEFING_HOUR_UTC", "11"))  # 6am ET
+BRIEFING_HOUR_UTC = int(os.environ.get("BRIEFING_HOUR_UTC", "11"))  # 6am ET — legacy, used by evening briefing
 EVENING_HOUR_UTC = int(os.environ.get("EVENING_HOUR_UTC", "1"))     # 8pm ET
+OVERNIGHT_HOUR_UTC = int(os.environ.get("OVERNIGHT_HOUR_UTC", "7"))  # 3am ET
+STANDUP_HOUR_UTC = int(os.environ.get("STANDUP_HOUR_UTC", "11"))     # 7am ET
 
 # Flask
 FLASK_PORT = int(os.environ.get("PORT", "8081"))

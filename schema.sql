@@ -316,3 +316,22 @@ CREATE TABLE IF NOT EXISTS shams_group_chat (
     timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_group_chat_ts ON shams_group_chat (timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS shams_overnight_runs (
+    id          SERIAL PRIMARY KEY,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    status      VARCHAR(20) DEFAULT 'running'
+                CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+    results     JSONB DEFAULT '{}',
+    summary     TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_overnight_runs_started ON shams_overnight_runs (started_at DESC);
+
+-- Migrate email triage from P1-P4 priority to Reply/Read/Archive tiers
+DO $$ BEGIN
+    ALTER TABLE shams_email_triage ADD COLUMN tier VARCHAR(10) DEFAULT 'archive'
+        CHECK (tier IN ('reply', 'read', 'archive'));
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_email_triage_tier ON shams_email_triage (tier);
