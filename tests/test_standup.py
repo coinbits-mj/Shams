@@ -107,3 +107,46 @@ def test_triage_tier_parsing():
     assert results[0]["tier"] == "reply"
     assert results[1]["tier"] == "read"
     assert results[2]["tier"] == "archive"
+
+
+from unittest.mock import patch, MagicMock
+
+
+def test_overnight_loop_structure():
+    """Test that run_overnight_loop returns structured results."""
+    import standup
+
+    # Mock all external dependencies
+    with patch("standup.google_client") as mock_google, \
+         patch("standup.mercury_client") as mock_mercury, \
+         patch("standup.rumi_client") as mock_rumi, \
+         patch("standup.memory") as mock_memory, \
+         patch("standup.anthropic") as mock_anthropic:
+
+        # Setup mocks
+        mock_google.get_unread_emails_for_account.return_value = []
+        mock_google.get_todays_events.return_value = []
+        mock_mercury.get_balances.return_value = {"entities": [], "grand_total": 0}
+        mock_rumi.get_daily_pl.return_value = None
+        mock_rumi.get_action_items.return_value = {"items": []}
+        mock_memory.create_overnight_run.return_value = 1
+        mock_memory.get_missions.return_value = []
+        mock_memory.get_open_loops.return_value = []
+        mock_memory.get_actions.return_value = []
+
+        # Mock the Claude API for archive summary
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="Nothing to summarize.")]
+        mock_client.messages.create.return_value = mock_response
+
+        results = standup.run_overnight_loop()
+
+        assert "email" in results
+        assert "mercury" in results
+        assert "rumi" in results
+        assert "calendar" in results
+        assert "reminders" in results
+        mock_memory.create_overnight_run.assert_called_once()
+        mock_memory.update_overnight_run.assert_called_once()
