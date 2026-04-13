@@ -130,6 +130,7 @@ def test_overnight_loop_structure():
         mock_rumi.get_daily_pl.return_value = None
         mock_rumi.get_action_items.return_value = {"items": []}
         mock_memory.create_overnight_run.return_value = 1
+        mock_memory.get_latest_overnight_run.return_value = None  # No previous run — lock check passes
         mock_memory.get_missions.return_value = []
         mock_memory.get_open_loops.return_value = []
         mock_memory.get_actions.return_value = []
@@ -452,3 +453,29 @@ def test_contact_noise_filtering():
     assert _is_noise_contact("support@squareup.com") is True
     assert _is_noise_contact("ahmed@cafeimports.com") is False
     assert _is_noise_contact("maher@qcitycoffee.com") is False
+
+
+def test_relationship_scan_structure():
+    """Test that _step_relationship_scan returns structured results."""
+    from unittest.mock import patch, MagicMock
+    import standup
+
+    with patch("standup.memory") as mock_memory, \
+         patch("standup.google_client") as mock_google, \
+         patch("standup.anthropic") as mock_anthropic:
+
+        mock_memory.get_cooling_contacts.return_value = []
+        mock_memory.get_contact_count.return_value = 0
+        mock_memory.get_triaged_emails.return_value = []
+        mock_google.get_todays_events.return_value = []
+
+        mock_client = MagicMock()
+        mock_anthropic.Anthropic.return_value = mock_client
+
+        result = standup._step_relationship_scan()
+
+        assert "contacts_updated" in result
+        assert "new_contacts" in result
+        assert "cooling" in result
+        assert "cold" in result
+        mock_memory.update_all_warmth_scores.assert_called_once()

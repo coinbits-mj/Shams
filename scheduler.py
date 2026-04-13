@@ -409,7 +409,7 @@ def init_scheduler():
     scheduler.add_job(send_evening_briefing, "cron", hour=config.EVENING_HOUR_UTC, minute=0)
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
     scheduler.add_job(agent_health_check, "interval", minutes=5, id="health_check")
-    scheduler.add_job(mission_stale_check, "cron", hour=12, minute=0, id="stale_check")  # noon UTC
+    # mission_stale_check removed — now handled by overnight loop forgetting check
     scheduler.add_job(smart_alerts_check, "interval", hours=1, id="smart_alerts")  # every hour
     scheduler.add_job(send_weekly_pl_digest, "cron", day_of_week="sun", hour=1, minute=0, id="weekly_pl")
     scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")

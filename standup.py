@@ -171,6 +171,17 @@ def run_overnight_loop() -> dict:
 
     Returns structured results dict. Also saves to shams_overnight_runs.
     """
+    # Prevent duplicate runs (e.g., during Railway deploy overlap)
+    latest = memory.get_latest_overnight_run()
+    if latest and latest.get("started_at"):
+        started = latest["started_at"]
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        age_minutes = (datetime.now(timezone.utc) - started).total_seconds() / 60
+        if age_minutes < 30:
+            logger.warning("Overnight loop skipped — another run started %d minutes ago", int(age_minutes))
+            return latest.get("results", {}) if isinstance(latest.get("results"), dict) else {}
+
     run_id = memory.create_overnight_run()
     results = {
         "email": {"reply": [], "read": [], "archived": [], "archive_summary": ""},
@@ -1080,8 +1091,16 @@ def deliver_morning_standup():
     Phase 1: Send overview message
     Phase 2: Drip-feed action items (reply drafts, prep briefs, reminders)
     """
-    # Clear any stale standup state from a previous day
+    # Prevent duplicate standup delivery
     old_state = memory.get_standup_state()
+    if old_state and old_state.get("phase") == "dripping":
+        started_run = old_state.get("run_id")
+        latest = memory.get_latest_overnight_run()
+        if latest and latest.get("id") == started_run:
+            logger.warning("Standup already in progress for run #%s — skipping", started_run)
+            return
+
+    # Clear any stale standup state from a previous day
     if old_state:
         memory.clear_standup_state()
 
