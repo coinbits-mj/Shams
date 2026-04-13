@@ -50,6 +50,26 @@ STANDUP_TRUST_MAP = {
     "scout_info": "deal_create",
 }
 
+# ── P&L configuration ─────────────────────────────────────────────────────
+
+PL_CONFIG = {
+    "hourly_rate": 250,
+    "time_values": {  # minutes saved per action
+        "email_triage": 0.5,
+        "draft_reply": 5,
+        "prep_brief": 15,
+        "reminder": 10,
+        "auto_approve": 2,
+        "scout_finding": 20,
+    },
+    "deal_advance_bonus": 500,
+    "token_pricing": {
+        "input_per_million": 3.00,
+        "output_per_million": 15.00,
+    },
+    "railway_monthly": 75,
+}
+
 
 # ── Overnight Loop ─────────────────────────────────────────────────────────
 

@@ -352,3 +352,31 @@ def test_standup_trust_map_covers_all_item_types():
     expected_types = ["reply", "prep", "reminder", "scout_outreach", "scout_info"]
     for t in expected_types:
         assert t in STANDUP_TRUST_MAP, f"Missing trust mapping for standup type: {t}"
+
+
+def test_pl_config_exists():
+    """Test that PL_CONFIG exists with expected structure."""
+    from standup import PL_CONFIG
+    assert PL_CONFIG["hourly_rate"] == 250
+    assert "email_triage" in PL_CONFIG["time_values"]
+    assert "input_per_million" in PL_CONFIG["token_pricing"]
+    assert PL_CONFIG["token_pricing"]["input_per_million"] == 3.00
+
+
+def test_pl_revenue_calculation():
+    """Test revenue calculation from time values."""
+    from standup import PL_CONFIG
+    hourly = PL_CONFIG["hourly_rate"]
+    draft_value = (5 / 60) * hourly
+    assert round(draft_value, 2) == 20.83
+    triage_value = (0.5 / 60) * hourly
+    assert round(triage_value, 2) == 2.08
+
+
+def test_pl_cost_calculation():
+    """Test cost calculation from token counts."""
+    from standup import PL_CONFIG
+    pricing = PL_CONFIG["token_pricing"]
+    cost = (100_000 / 1_000_000 * pricing["input_per_million"]) + \
+           (20_000 / 1_000_000 * pricing["output_per_million"])
+    assert round(cost, 4) == 0.6

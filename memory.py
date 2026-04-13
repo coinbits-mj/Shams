@@ -993,3 +993,134 @@ def get_trust_summary() -> list[dict]:
     with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(f"SELECT * FROM {P}trust_actions ORDER BY action_type")
         return cur.fetchall()
+
+
+# ── P&L Entries ────────────────────────────────────────────────────────────
+
+def log_pl_revenue(category: str, amount: float, description: str = "",
+                   metadata: dict | None = None):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}pl_entries (entry_type, category, amount, description, metadata) "
+            f"VALUES ('revenue', %s, %s, %s, %s)",
+            (category, amount, description, json.dumps(metadata or {})),
+        )
+
+
+def log_pl_cost(input_tokens: int = 0, output_tokens: int = 0, context: str = ""):
+    from standup import PL_CONFIG
+    pricing = PL_CONFIG["token_pricing"]
+    cost = (input_tokens / 1_000_000 * pricing["input_per_million"]) + \
+           (output_tokens / 1_000_000 * pricing["output_per_million"])
+    if cost <= 0:
+        return
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}pl_entries (entry_type, category, amount, description, metadata) "
+            f"VALUES ('cost', 'claude_api', %s, %s, %s)",
+            (cost, context, json.dumps({"input_tokens": input_tokens, "output_tokens": output_tokens})),
+        )
+
+
+def log_pl_hosting_cost():
+    from standup import PL_CONFIG
+    daily_cost = PL_CONFIG["railway_monthly"] / 30
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}pl_entries (entry_type, category, amount, description) "
+            f"VALUES ('cost', 'railway_hosting', %s, 'Daily Railway hosting')",
+            (daily_cost,),
+        )
+
+
+def get_pl_daily(date: str | None = None) -> dict:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if date:
+            cur.execute(
+                f"SELECT entry_type, category, SUM(amount) as total FROM {P}pl_entries "
+                f"WHERE date = %s GROUP BY entry_type, category", (date,)
+            )
+        else:
+            cur.execute(
+                f"SELECT entry_type, category, SUM(amount) as total FROM {P}pl_entries "
+                f"WHERE date = CURRENT_DATE - INTERVAL '1 day' GROUP BY entry_type, category"
+            )
+        rows = cur.fetchall()
+
+    revenue = sum(float(r["total"]) for r in rows if r["entry_type"] == "revenue")
+    costs = sum(float(r["total"]) for r in rows if r["entry_type"] == "cost")
+    return {
+        "revenue": round(revenue, 2),
+        "costs": round(costs, 2),
+        "net": round(revenue - costs, 2),
+        "entries": rows,
+    }
+
+
+def get_pl_weekly(weeks_ago: int = 0) -> dict:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT entry_type, category, SUM(amount) as total, "
+            f"COUNT(*) as count FROM {P}pl_entries "
+            f"WHERE date >= CURRENT_DATE - INTERVAL '%s weeks' - INTERVAL '6 days' "
+            f"AND date <= CURRENT_DATE - INTERVAL '%s weeks' "
+            f"GROUP BY entry_type, category ORDER BY entry_type, total DESC",
+            (weeks_ago, weeks_ago),
+        )
+        rows = cur.fetchall()
+
+        cur.execute(
+            f"SELECT SUM((metadata->>'input_tokens')::bigint) as input_tokens, "
+            f"SUM((metadata->>'output_tokens')::bigint) as output_tokens "
+            f"FROM {P}pl_entries "
+            f"WHERE category = 'claude_api' "
+            f"AND date >= CURRENT_DATE - INTERVAL '%s weeks' - INTERVAL '6 days' "
+            f"AND date <= CURRENT_DATE - INTERVAL '%s weeks'",
+            (weeks_ago, weeks_ago),
+        )
+        token_row = cur.fetchone()
+
+    revenue_entries = [r for r in rows if r["entry_type"] == "revenue"]
+    cost_entries = [r for r in rows if r["entry_type"] == "cost"]
+    revenue = sum(float(r["total"]) for r in revenue_entries)
+    costs = sum(float(r["total"]) for r in cost_entries)
+
+    return {
+        "revenue": round(revenue, 2),
+        "costs": round(costs, 2),
+        "net": round(revenue - costs, 2),
+        "revenue_breakdown": {r["category"]: {"total": round(float(r["total"]), 2), "count": r["count"]} for r in revenue_entries},
+        "cost_breakdown": {r["category"]: round(float(r["total"]), 2) for r in cost_entries},
+        "tokens": {
+            "input": int(token_row["input_tokens"] or 0) if token_row else 0,
+            "output": int(token_row["output_tokens"] or 0) if token_row else 0,
+        },
+    }
+
+
+def get_pl_running_total() -> dict:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT entry_type, SUM(amount) as total FROM {P}pl_entries "
+            f"GROUP BY entry_type"
+        )
+        rows = {r[0]: float(r[1]) for r in cur.fetchall()}
+
+    revenue = round(rows.get("revenue", 0), 2)
+    costs = round(rows.get("cost", 0), 2)
+    return {"revenue": revenue, "costs": costs, "net": round(revenue - costs, 2)}
+
+
+def get_deal(deal_id: int) -> dict | None:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}deals WHERE id = %s", (deal_id,))
+        return cur.fetchone()
+
+
+def get_pl_entries_by_metadata(key: str, value) -> list[dict]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}pl_entries WHERE metadata->>%s = %s",
+            (key, str(value)),
+        )
+        return cur.fetchall()

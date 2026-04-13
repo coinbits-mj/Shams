@@ -345,3 +345,16 @@ CREATE TABLE IF NOT EXISTS shams_trust_actions (
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_trust_actions_type ON shams_trust_actions (action_type);
+
+CREATE TABLE IF NOT EXISTS shams_pl_entries (
+    id          SERIAL PRIMARY KEY,
+    date        DATE NOT NULL DEFAULT CURRENT_DATE,
+    entry_type  VARCHAR(20) NOT NULL CHECK (entry_type IN ('revenue', 'cost')),
+    category    VARCHAR(50) NOT NULL,
+    description TEXT DEFAULT '',
+    amount      NUMERIC(10,4) NOT NULL,
+    metadata    JSONB DEFAULT '{}',
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_pl_entries_date ON shams_pl_entries (date DESC);
+CREATE INDEX IF NOT EXISTS idx_pl_entries_type ON shams_pl_entries (entry_type, date DESC);
