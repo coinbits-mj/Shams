@@ -54,6 +54,54 @@ def deliver_standup():
         logger.error(f"Morning standup delivery failed: {e}")
 
 
+# ── P&L + Hosting ─────────────────────────────────────────────────────────
+
+def send_weekly_pl_digest():
+    """Send weekly P&L digest via Telegram. Scheduled Sunday 9pm ET (1am UTC Monday)."""
+    try:
+        pl = memory.get_pl_weekly()
+        running = memory.get_pl_running_total()
+
+        lines = ["📊 Shams Weekly P&L\n"]
+
+        lines.append(f"Revenue: ${pl['revenue']:,.2f}")
+        for cat, data in pl.get("revenue_breakdown", {}).items():
+            label = cat.replace("_", " ").title()
+            lines.append(f"  {label}: {data['count']}x (${data['total']:,.2f})")
+
+        lines.append(f"\nCosts: ${pl['costs']:,.2f}")
+        for cat, total in pl.get("cost_breakdown", {}).items():
+            label = cat.replace("_", " ").title()
+            if cat == "claude_api":
+                tokens = pl.get("tokens", {})
+                input_k = tokens.get("input", 0) // 1000
+                output_k = tokens.get("output", 0) // 1000
+                lines.append(f"  {label}: ${total:,.2f} ({input_k}K input / {output_k}K output)")
+            else:
+                lines.append(f"  {label}: ${total:,.2f}")
+
+        net = pl["net"]
+        roi = f"{pl['revenue'] / pl['costs']:.1f}x" if pl["costs"] > 0 else "∞"
+        lines.append(f"\nNet: ${net:,.2f}")
+        lines.append(f"ROI: {roi}")
+        lines.append(f"\nRunning total: ${running['net']:,.2f}")
+
+        if config.TELEGRAM_CHAT_ID:
+            send_telegram(config.TELEGRAM_CHAT_ID, "\n".join(lines))
+        memory.log_activity("shams", "pl_digest", f"Weekly P&L: ${net:,.2f} net, {roi} ROI")
+        logger.info("Weekly P&L digest sent")
+    except Exception as e:
+        logger.error(f"Weekly P&L digest failed: {e}", exc_info=True)
+
+
+def log_daily_hosting():
+    """Log daily Railway hosting cost. Scheduled at midnight UTC."""
+    try:
+        memory.log_pl_hosting_cost()
+    except Exception as e:
+        logger.error(f"Hosting cost logging failed: {e}")
+
+
 # ── Dynamic scheduled tasks ────────────────────────────────────────────────
 
 def _run_dynamic_task(task_id: int):
@@ -363,6 +411,8 @@ def init_scheduler():
     scheduler.add_job(agent_health_check, "interval", minutes=5, id="health_check")
     scheduler.add_job(mission_stale_check, "cron", hour=12, minute=0, id="stale_check")  # noon UTC
     scheduler.add_job(smart_alerts_check, "interval", hours=1, id="smart_alerts")  # every hour
+    scheduler.add_job(send_weekly_pl_digest, "cron", day_of_week="sun", hour=1, minute=0, id="weekly_pl")
+    scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")
     scheduler.start()
     logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
     logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily)")
