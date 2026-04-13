@@ -433,6 +433,56 @@ def _handle_standup_callback(action_type: str, idx: int, cb_id: str, chat_id: st
         handled[str(idx)] = "snooze"
         _ack_callback(cb_id, "Snoozed")
 
+    elif action_type == "su_email":
+        if item.get("email") and item.get("draft"):
+            import google_client
+            account = "personal"
+            for acct in config.GOOGLE_ACCOUNTS:
+                break
+            result = google_client.create_draft_reply(account, "", item["draft"])
+            if result:
+                _ack_callback(cb_id, "Draft saved to Gmail")
+                send_telegram(chat_id, f"Draft saved for {item.get('name', '')}")
+                memory.log_activity("shams", "relationship_followup", f"Email draft saved for {item.get('name', '')}")
+            else:
+                _ack_callback(cb_id, "Draft failed")
+        handled[str(idx)] = "sent"
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
+
+    elif action_type == "su_imsg":
+        if item.get("phone") and item.get("draft"):
+            memory.queue_bridge_command("imessage", item["phone"], item["draft"])
+            _ack_callback(cb_id, "Queued for iMessage")
+            send_telegram(chat_id, f"iMessage queued for {item.get('name', '')} — bridge will send it")
+            memory.log_activity("shams", "relationship_followup", f"iMessage queued for {item.get('name', '')}")
+        handled[str(idx)] = "sent"
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
+
+    elif action_type == "su_wa":
+        if item.get("phone") and item.get("draft"):
+            memory.queue_bridge_command("whatsapp", item["phone"], item["draft"])
+            _ack_callback(cb_id, "Queued for WhatsApp")
+            send_telegram(chat_id, f"WhatsApp queued for {item.get('name', '')} — bridge will open it")
+            memory.log_activity("shams", "relationship_followup", f"WhatsApp queued for {item.get('name', '')}")
+        handled[str(idx)] = "sent"
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
+
+    elif action_type == "su_snooze7":
+        if item.get("contact_id"):
+            memory.snooze_contact(item["contact_id"], days=7)
+            _ack_callback(cb_id, "Snoozed 7 days")
+            send_telegram(chat_id, f"Snoozed {item.get('name', '')} for 7 days")
+        handled[str(idx)] = "snooze"
+
     elif action_type == "su_mission":
         # Create a mission from the reminder
         mission_id = memory.create_mission(

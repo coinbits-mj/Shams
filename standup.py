@@ -35,6 +35,7 @@ TRUST_TIERS = {
     "deal_create": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
     "deal_update": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
     "prep_brief": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
+    "relationship_followup": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
     # High risk — 30 approvals, <5% rejection
     "scout_outreach": {"tier": "high", "threshold": 30, "max_rejection_pct": 5},
     "email_send": {"tier": "high", "threshold": 30, "max_rejection_pct": 5},
@@ -48,6 +49,7 @@ STANDUP_TRUST_MAP = {
     "reminder": "reminder_ack",
     "scout_outreach": "scout_outreach",
     "scout_info": "deal_create",
+    "relationship": "relationship_followup",
 }
 
 # ── P&L configuration ─────────────────────────────────────────────────────
@@ -61,6 +63,7 @@ PL_CONFIG = {
         "reminder": 10,
         "auto_approve": 2,
         "scout_finding": 20,
+        "relationship_followup": 10,
     },
     "deal_advance_bonus": 500,
     "token_pricing": {
@@ -176,6 +179,7 @@ def run_overnight_loop() -> dict:
         "calendar": {"events": [], "prep_briefs": [], "conflicts": []},
         "reminders": [],
         "scout": {"findings": [], "searches_run": 0, "new_deals": 0, "updated_deals": 0},
+        "relationships": {"contacts_updated": 0, "new_contacts": 0, "cooling": [], "cold": [], "follow_ups_drafted": 0},
     }
     status = "completed"
 
@@ -245,6 +249,19 @@ def run_overnight_loop() -> dict:
     except Exception as e:
         logger.error(f"Overnight Scout sweep failed: {e}", exc_info=True)
         results["scout"] = {"findings": [], "searches_run": 0, "new_deals": 0, "updated_deals": 0}
+        status = "partial"
+
+    # Step 7: Relationship scan
+    try:
+        results["relationships"] = _step_relationship_scan()
+        memory.log_activity("shams", "overnight", "Relationship scan complete", {
+            "contacts_updated": results["relationships"]["contacts_updated"],
+            "cooling": len(results["relationships"]["cooling"]),
+            "cold": len(results["relationships"]["cold"]),
+        })
+    except Exception as e:
+        logger.error(f"Overnight relationship scan failed: {e}", exc_info=True)
+        results["relationships"] = {"contacts_updated": 0, "new_contacts": 0, "cooling": [], "cold": [], "follow_ups_drafted": 0}
         status = "partial"
 
     # Save results
@@ -849,6 +866,172 @@ def _call_scout() -> dict:
     }
 
 
+# ── Relationship scan ──────────────────────────────────────────────────────
+
+
+def _step_relationship_scan() -> dict:
+    """Scan email + calendar + deals for relationship signals, update warmth scores."""
+    contacts_updated = 0
+    new_contacts = 0
+
+    # Extract contacts from today's triaged emails (already processed by email sweep)
+    try:
+        recent_emails = memory.get_triaged_emails(limit=50)
+        for email in recent_emails:
+            from_addr = email.get("from_addr", "")
+            if not from_addr or _is_noise_contact(from_addr):
+                continue
+            # Extract name from "Name <email>" format
+            if "<" in from_addr and ">" in from_addr:
+                name = from_addr.split("<")[0].strip().strip('"')
+                addr = from_addr.split("<")[1].split(">")[0].strip()
+            else:
+                name = from_addr.split("@")[0]
+                addr = from_addr
+            if _is_noise_contact(addr):
+                continue
+            cid = memory.upsert_contact(name=name, email=addr, source="email", channel="email", direction="inbound")
+            if cid:
+                contacts_updated += 1
+    except Exception as e:
+        logger.error(f"Relationship scan email extraction failed: {e}")
+
+    # Extract contacts from today's calendar events
+    try:
+        events = google_client.get_todays_events()
+        for event in events:
+            # Calendar events don't have attendee emails in the current API response
+            # but the event summary often contains names we can match
+            pass  # Attendee extraction requires Calendar API attendees field — future enhancement
+    except Exception as e:
+        logger.error(f"Relationship scan calendar extraction failed: {e}")
+
+    # Ensure deal contacts are tracked
+    try:
+        from config import DATABASE_URL
+        import psycopg2, psycopg2.extras
+        with psycopg2.connect(DATABASE_URL) as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, title, contact FROM shams_deals WHERE stage NOT IN ('closed', 'dead') AND contact != ''"
+            )
+            deals = cur.fetchall()
+        for deal in deals:
+            contact_str = deal.get("contact", "")
+            if not contact_str:
+                continue
+            # Try to extract email from contact field
+            email = None
+            if "@" in contact_str:
+                parts = contact_str.split()
+                for p in parts:
+                    if "@" in p:
+                        email = p.strip("<>(),")
+                        break
+            name = contact_str.split("<")[0].strip() if "<" in contact_str else contact_str
+            if email and not _is_noise_contact(email):
+                memory.upsert_contact(name=name, email=email, source="deal", channel="email", deal_id=deal["id"])
+    except Exception as e:
+        logger.error(f"Relationship scan deal extraction failed: {e}")
+
+    # Recalculate warmth scores
+    memory.update_all_warmth_scores()
+
+    # Find cooling and cold contacts
+    cooling = memory.get_cooling_contacts(threshold=49)
+    cold = [c for c in cooling if c.get("warmth_score", 0) < 25]
+    cooling_only = [c for c in cooling if c.get("warmth_score", 0) >= 25]
+
+    # Draft follow-ups for cooling/cold contacts
+    follow_ups = []
+    if cooling:
+        try:
+            api_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+            contacts_text = "\n".join(
+                f"- {c['name']} ({c.get('email', c.get('phone', '?'))}) — "
+                f"warmth: {c['warmth_score']}/100, "
+                f"last contact: {_days_since(c)} days ago, "
+                f"channels: {', '.join(c.get('channels', []))}"
+                + (f", deal: #{c['deal_id']}" if c.get("deal_id") else "")
+                for c in cooling[:5]
+            )
+            prompt = (
+                f"Draft brief, natural follow-up messages for these contacts that Maher is losing touch with. "
+                f"Keep it casual and genuine — Maher is direct and concise. One message per contact.\n\n"
+                f"{contacts_text}\n\n"
+                f"Format:\nNAME: <name>\nDRAFT: <message>\n---"
+            )
+            response = api_client.messages.create(
+                model=config.CLAUDE_MODEL, max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            for block in response.content[0].text.split("---"):
+                block = block.strip()
+                if not block:
+                    continue
+                name_val, draft_val = "", ""
+                for line in block.split("\n"):
+                    if line.startswith("NAME:"):
+                        name_val = line[5:].strip()
+                    elif line.startswith("DRAFT:"):
+                        draft_val = line[6:].strip()
+                    elif draft_val:
+                        draft_val += "\n" + line
+                if name_val and draft_val:
+                    follow_ups.append({"name": name_val, "draft": draft_val.strip()})
+        except Exception as e:
+            logger.error(f"Relationship follow-up drafting failed: {e}")
+
+    # Attach drafts to matching contacts
+    cooling_with_drafts = []
+    for c in cooling:
+        entry = {
+            "id": c["id"],
+            "name": c["name"],
+            "email": c.get("email"),
+            "phone": c.get("phone"),
+            "channels": c.get("channels", []),
+            "warmth": c.get("warmth_score", 0),
+            "days_silent": _days_since(c),
+            "deal_id": c.get("deal_id"),
+            "draft": "",
+        }
+        for fu in follow_ups:
+            if fu["name"].lower() in c["name"].lower() or c["name"].lower() in fu["name"].lower():
+                entry["draft"] = fu["draft"]
+                break
+        cooling_with_drafts.append(entry)
+
+    # Log P&L revenue for relationship management
+    _log_revenue("reminder", len(cooling), f"{len(cooling)} relationship follow-ups surfaced")
+
+    total_contacts = memory.get_contact_count()
+
+    return {
+        "contacts_updated": contacts_updated,
+        "new_contacts": new_contacts,
+        "total_contacts": total_contacts,
+        "cooling": [c for c in cooling_with_drafts if c["warmth"] >= 25],
+        "cold": [c for c in cooling_with_drafts if c["warmth"] < 25],
+        "follow_ups_drafted": len(follow_ups),
+    }
+
+
+def _days_since(contact: dict) -> int:
+    """Calculate days since last interaction with a contact."""
+    now = datetime.now(timezone.utc)
+    timestamps = []
+    for field in ("last_inbound", "last_outbound", "last_meeting"):
+        ts = contact.get(field)
+        if ts:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            timestamps.append(ts)
+    if not timestamps:
+        return 999
+    latest = max(timestamps)
+    return (now - latest).days
+
+
 # ── Summary builder ────────────────────────────────────────────────────────
 
 
@@ -879,6 +1062,11 @@ def _build_overnight_summary(results: dict) -> str:
     scout = results.get("scout", {})
     if scout.get("findings"):
         parts.append(f"Scout: {len(scout['findings'])} findings, {scout.get('new_deals', 0)} new deals")
+
+    rels = results.get("relationships", {})
+    total_cooling = len(rels.get("cooling", [])) + len(rels.get("cold", []))
+    if total_cooling:
+        parts.append(f"Relationships: {total_cooling} need attention")
 
     return " | ".join(parts)
 
@@ -1020,6 +1208,18 @@ def _build_overview_message(results: dict) -> str:
             parts.append(f"{updated_deals} deal{'s' if updated_deals != 1 else ''} updated")
         lines.append(f"🔍 {' · '.join(parts)}")
 
+    # Relationships
+    rels = results.get("relationships", {})
+    cooling_count = len(rels.get("cooling", []))
+    cold_count = len(rels.get("cold", []))
+    if cooling_count or cold_count:
+        parts_rel = []
+        if cooling_count:
+            parts_rel.append(f"{cooling_count} cooling")
+        if cold_count:
+            parts_rel.append(f"{cold_count} going cold")
+        lines.append(f"🤝 {' · '.join(parts_rel)}")
+
     # Daily P&L
     try:
         pl = memory.get_pl_daily()
@@ -1097,6 +1297,22 @@ def _build_action_items(results: dict) -> list[dict]:
                 "summary": f.get("summary", ""),
                 "deal_id": f.get("deal_id"),
             })
+
+    # 5. Relationship follow-ups
+    rels = results.get("relationships", {})
+    for c in rels.get("cold", []) + rels.get("cooling", []):
+        items.append({
+            "type": "relationship",
+            "contact_id": c.get("id"),
+            "name": c.get("name", ""),
+            "email": c.get("email"),
+            "phone": c.get("phone"),
+            "channels": c.get("channels", []),
+            "warmth": c.get("warmth", 0),
+            "days_silent": c.get("days_silent", 0),
+            "deal_id": c.get("deal_id"),
+            "draft": c.get("draft", ""),
+        })
 
     return items
 
@@ -1250,6 +1466,31 @@ def _send_next_standup_item():
             {"text": "Got it", "callback_data": f"su_ok:{idx}"},
             {"text": "Create mission", "callback_data": f"su_mission:{idx}"},
         ]
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+    elif item["type"] == "relationship":
+        cold_label = "Going cold" if item["warmth"] < 25 else "Cooling"
+        msg = (
+            f"🤝 {cold_label}: {item['name']}\n"
+            f"Last contact: {item['days_silent']} days ago\n"
+            f"Warmth: {item['warmth']}/100"
+        )
+        if item.get("draft"):
+            msg += f"\n\nDraft: {item['draft']}"
+
+        buttons = []
+        channels = item.get("channels", [])
+        if "email" in channels and item.get("email"):
+            buttons.append({"text": "📧 Email", "callback_data": f"su_email:{idx}"})
+        if "imessage" in channels and item.get("phone"):
+            buttons.append({"text": "💬 iMessage", "callback_data": f"su_imsg:{idx}"})
+        if "whatsapp" in channels and item.get("phone"):
+            buttons.append({"text": "💚 WhatsApp", "callback_data": f"su_wa:{idx}"})
+        if not buttons and item.get("email"):
+            buttons.append({"text": "📧 Email", "callback_data": f"su_email:{idx}"})
+        buttons.append({"text": "✏️ Edit", "callback_data": f"su_edit:{idx}"})
+        buttons.append({"text": "Skip", "callback_data": f"su_skip:{idx}"})
+        buttons.append({"text": "😴 7d", "callback_data": f"su_snooze7:{idx}"})
         send_telegram_with_buttons(chat_id, msg, buttons)
 
 
