@@ -560,3 +560,245 @@ def _build_overnight_summary(results: dict) -> str:
         parts.append(f"Reminders: {len(reminders)} items")
 
     return " | ".join(parts)
+
+
+# ── Morning Standup Delivery ───────────────────────────────────────────────
+
+
+def deliver_morning_standup():
+    """Deliver the morning standup via Telegram. Called at 7am ET by scheduler.
+
+    Phase 1: Send overview message
+    Phase 2: Drip-feed action items (reply drafts, prep briefs, reminders)
+    """
+    run = memory.get_latest_overnight_run()
+    if not run or run.get("status") == "failed":
+        if config.TELEGRAM_CHAT_ID:
+            send_telegram(config.TELEGRAM_CHAT_ID,
+                          "Overnight loop didn't run or failed. Check the logs.")
+        return
+
+    results = run.get("results", {})
+    if isinstance(results, str):
+        results = json.loads(results)
+
+    # Phase 1: Overview
+    overview = _build_overview_message(results)
+    if config.TELEGRAM_CHAT_ID:
+        send_telegram(config.TELEGRAM_CHAT_ID, overview)
+
+    # Phase 2: Build action items list and start dripping
+    action_items = _build_action_items(results)
+
+    if not action_items:
+        if config.TELEGRAM_CHAT_ID:
+            send_telegram(config.TELEGRAM_CHAT_ID, "Nothing needs your input today. Have a good one.")
+        return
+
+    # Save standup state and send first item
+    memory.set_standup_state({
+        "phase": "dripping",
+        "run_id": run["id"],
+        "items": action_items,
+        "current_index": 0,
+        "sent_count": 0,
+        "handled": {},
+    })
+
+    _send_next_standup_item()
+
+
+def _build_overview_message(results: dict) -> str:
+    """Build the single overview Telegram message."""
+    from datetime import date
+    today = date.today().strftime("%a %b %-d")
+    lines = [f"☀️ Morning Standup — {today}\n"]
+
+    # Email
+    email = results.get("email", {})
+    reply_count = len(email.get("reply", []))
+    read_count = len(email.get("read", []))
+    archived_count = len(email.get("archived", []))
+    lines.append(f"📬 {reply_count} replies drafted · {read_count} to read · {archived_count} archived")
+    archive_summary = email.get("archive_summary", "")
+    if archive_summary:
+        lines.append(f"   {archive_summary}")
+
+    # Mercury
+    mercury = results.get("mercury", {})
+    total = mercury.get("grand_total", 0)
+    if total:
+        alert_text = ""
+        for alert in mercury.get("alerts", []):
+            if alert.get("type") == "low_balance":
+                acct = alert.get("account", "").title()
+                bal = alert.get("balance", 0)
+                alert_text = f" · ⚠️ {acct} low (${bal:,.0f})"
+                break
+        lines.append(f"💰 Total cash: ${total:,.0f}{alert_text}")
+
+    # Rumi
+    rumi = results.get("rumi", {})
+    if rumi.get("revenue"):
+        margin_pct = rumi.get("margin", 0)
+        if isinstance(margin_pct, float) and margin_pct < 1:
+            margin_display = f"{margin_pct:.0%}"
+        else:
+            margin_display = f"{margin_pct:.1f}%"
+        orders = rumi.get("orders", 0)
+        lines.append(f"📊 Yesterday: ${rumi['revenue']:,.0f} rev / {margin_display} margin / {orders} orders")
+
+    # Calendar
+    calendar = results.get("calendar", {})
+    events = calendar.get("events", [])
+    prep_briefs = calendar.get("prep_briefs", [])
+    if events:
+        prep_note = f" · ⚠️ {len(prep_briefs)} need prep" if prep_briefs else ""
+        lines.append(f"📅 {len(events)} meetings today{prep_note}")
+
+    # Reminders
+    reminders = results.get("reminders", [])
+    if reminders:
+        lines.append(f"🔔 {len(reminders)} things you might be forgetting")
+
+    lines.append("\nWalking you through action items now ↓")
+
+    return "\n".join(lines)
+
+
+def _build_action_items(results: dict) -> list[dict]:
+    """Build ordered list of action items for drip-feed."""
+    items = []
+
+    # 1. Reply drafts (most time-sensitive)
+    email = results.get("email", {})
+    reply_emails = email.get("reply", [])
+    for i, r in enumerate(reply_emails):
+        items.append({
+            "type": "reply",
+            "index_label": f"Reply {i+1}/{len(reply_emails)}",
+            "from": r.get("from", ""),
+            "subject": r.get("subject", ""),
+            "draft": r.get("draft", ""),
+            "triage_id": r.get("triage_id"),
+            "account": r.get("account", ""),
+            "message_id": r.get("message_id", ""),
+        })
+
+    # 2. Prep briefs
+    calendar = results.get("calendar", {})
+    for brief in calendar.get("prep_briefs", []):
+        items.append({
+            "type": "prep",
+            "event": brief.get("event", ""),
+            "brief": brief.get("brief", ""),
+        })
+
+    # 3. Reminders
+    for r in results.get("reminders", []):
+        items.append({
+            "type": "reminder",
+            "title": r.get("title", ""),
+            "why": r.get("why", ""),
+            "suggestion": r.get("suggestion", ""),
+            "draft": r.get("draft", ""),
+            "mission_id": r.get("mission_id"),
+            "loop_id": r.get("loop_id"),
+            "action_id": r.get("action_id"),
+        })
+
+    return items
+
+
+def _send_next_standup_item():
+    """Send the next action item in the standup drip-feed."""
+    state = memory.get_standup_state()
+    if not state or state.get("phase") != "dripping":
+        return
+
+    items = state.get("items", [])
+    idx = state.get("current_index", 0)
+
+    if idx >= len(items):
+        _finish_standup(state)
+        return
+
+    item = items[idx]
+    chat_id = config.TELEGRAM_CHAT_ID
+    if not chat_id:
+        return
+
+    if item["type"] == "reply":
+        msg = (
+            f"📬 {item['index_label']}\n"
+            f"From: {item['from']}\n"
+            f"Re: {item['subject']}\n\n"
+            f"Draft: {item['draft']}"
+        )
+        buttons = [
+            {"text": "✓ Send", "callback_data": f"su_send:{idx}"},
+            {"text": "✏️ Edit", "callback_data": f"su_edit:{idx}"},
+            {"text": "Skip", "callback_data": f"su_skip:{idx}"},
+        ]
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+    elif item["type"] == "prep":
+        msg = (
+            f"📋 Prep: {item['event']}\n\n"
+            f"{item['brief']}"
+        )
+        buttons = [
+            {"text": "👍 Looks good", "callback_data": f"su_ok:{idx}"},
+            {"text": "✏️ Edit", "callback_data": f"su_edit:{idx}"},
+            {"text": "Skip", "callback_data": f"su_skip:{idx}"},
+        ]
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+    elif item["type"] == "reminder":
+        msg = (
+            f"🔔 Don't forget: {item['title']}\n"
+            f"{item['why']}"
+        )
+        if item.get("draft"):
+            msg += f"\n\nSuggested next steps: {item['draft']}"
+
+        buttons = [
+            {"text": "Got it", "callback_data": f"su_ok:{idx}"},
+            {"text": "Snooze", "callback_data": f"su_snooze:{idx}"},
+        ]
+        if item.get("mission_id"):
+            pass  # Already a mission
+        else:
+            buttons.append({"text": "Create mission", "callback_data": f"su_mission:{idx}"})
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+
+def _finish_standup(state: dict):
+    """Send wrap-up message and clear state."""
+    handled = state.get("handled", {})
+    sent = sum(1 for v in handled.values() if v == "sent")
+    skipped = sum(1 for v in handled.values() if v == "skip")
+    items = state.get("items", [])
+
+    parts = []
+    if sent:
+        parts.append(f"{sent} email draft{'s' if sent != 1 else ''} saved to Gmail")
+    if skipped:
+        parts.append(f"{skipped} skipped")
+
+    # Get archived count from overnight run
+    run = memory.get_latest_overnight_run()
+    if run:
+        results = run.get("results", {})
+        if isinstance(results, str):
+            results = json.loads(results)
+        archived = len(results.get("email", {}).get("archived", []))
+        if archived:
+            parts.append(f"{archived} archived")
+
+    summary = ", ".join(parts) if parts else "All done"
+
+    if config.TELEGRAM_CHAT_ID:
+        send_telegram(config.TELEGRAM_CHAT_ID, f"✅ Standup done. {summary}. Have a good one.")
+
+    memory.clear_standup_state()

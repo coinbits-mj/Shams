@@ -150,3 +150,41 @@ def test_overnight_loop_structure():
         assert "reminders" in results
         mock_memory.create_overnight_run.assert_called_once()
         mock_memory.update_overnight_run.assert_called_once()
+
+
+def test_build_overview_message():
+    """Test that overview message formats correctly."""
+    import standup
+
+    results = {
+        "email": {
+            "reply": [{"subject": "Test"}] * 3,
+            "read": [{"subject": "FYI"}] * 5,
+            "archived": [{"subject": "Spam"}] * 23,
+            "archive_summary": "Mostly Shopify notifications and newsletters",
+        },
+        "mercury": {
+            "balances": {"clifton": 14230, "plainfield": 8102, "personal": 52400, "coinbits": 3200},
+            "grand_total": 77932,
+            "alerts": [{"type": "low_balance", "account": "coinbits", "balance": 3200}],
+        },
+        "rumi": {"revenue": 1847, "cogs": 923, "margin": 0.50, "orders": 12, "wholesale_orders": 3},
+        "calendar": {
+            "events": [{"summary": "Supplier call", "start": "10:00 AM"}, {"summary": "Roasting", "start": "2:00 PM"}],
+            "prep_briefs": [{"event": "Supplier call", "brief": "Push for volume pricing"}],
+        },
+        "reminders": [
+            {"title": "Wholesale deploy", "type": "stale_mission"},
+            {"title": "Red House LOI", "type": "deadline"},
+            {"title": "Recharge migration", "type": "orphaned_loop"},
+        ],
+    }
+
+    msg = standup._build_overview_message(results)
+    assert "3 replies drafted" in msg
+    assert "5 to read" in msg
+    assert "23 archived" in msg
+    assert "$77,932" in msg
+    assert "Coinbits" in msg or "coinbits" in msg
+    assert "$1,847" in msg
+    assert "3 things" in msg or "3 item" in msg
