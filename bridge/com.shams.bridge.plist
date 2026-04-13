@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.shams.bridge</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/mj/Library/Application Support/Shams/shams_bridge.py</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SHAMS_API_URL</key>
+        <string>https://app.myshams.ai</string>
+        <key>SHAMS_BRIDGE_TOKEN</key>
+        <string>REPLACE_WITH_TOKEN</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/tmp/shams-bridge.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/shams-bridge.log</string>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
