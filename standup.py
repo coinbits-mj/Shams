@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import anthropic
 
@@ -174,10 +174,20 @@ def _step_email_sweep() -> dict:
         if not block:
             continue
         fields = {}
+        current_key = None
         for line in block.split("\n"):
-            if ":" in line:
-                k, _, v = line.partition(":")
-                fields[k.strip().upper()] = v.strip()
+            # Check if this line starts a new field
+            matched = False
+            for key in ("MESSAGE_ID", "TIER", "SUMMARY", "ACTION", "DRAFT"):
+                if line.upper().startswith(key + ":"):
+                    _, _, v = line.partition(":")
+                    fields[key] = v.strip()
+                    current_key = key
+                    matched = True
+                    break
+            # If not a new field, append to current (handles multi-line drafts)
+            if not matched and current_key:
+                fields[current_key] = fields.get(current_key, "") + "\n" + line
 
         msg_id = fields.get("MESSAGE_ID", "")
         email = email_lookup.get(msg_id)
@@ -313,15 +323,15 @@ def _step_rumi_check() -> dict:
         action_items = rumi_client.get_action_items()
         if action_items and action_items.get("items"):
             result["action_items"] = action_items["items"][:5]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Rumi action items fetch failed: {e}")
 
     try:
         inventory = rumi_client.get_inventory_alerts()
         if inventory:
             result["alerts"] = inventory if isinstance(inventory, list) else [inventory]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Rumi inventory alerts fetch failed: {e}")
 
     return result
 
@@ -460,7 +470,10 @@ def _step_forgetting_check() -> list[dict]:
     # Orphaned open loops — open loops with no recent activity
     loops = memory.get_open_loops()
     for loop in loops:
-        age_days = (datetime.now(timezone.utc) - loop["created_at"].replace(tzinfo=timezone.utc)).days if loop.get("created_at") else 0
+        created = loop.get("created_at")
+        if created and created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - created).days if created else 0
         if age_days > 7:
             reminders.append({
                 "type": "orphaned_loop",
@@ -474,7 +487,10 @@ def _step_forgetting_check() -> list[dict]:
     pending = memory.get_actions(status="pending")
     for a in pending:
         if a.get("created_at"):
-            age_hours = (datetime.now(timezone.utc) - a["created_at"].replace(tzinfo=timezone.utc)).total_seconds() / 3600
+            created = a["created_at"]
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
             if age_hours > 24:
                 reminders.append({
                     "type": "stale_action",
@@ -571,11 +587,24 @@ def deliver_morning_standup():
     Phase 1: Send overview message
     Phase 2: Drip-feed action items (reply drafts, prep briefs, reminders)
     """
+    # Clear any stale standup state from a previous day
+    old_state = memory.get_standup_state()
+    if old_state:
+        memory.clear_standup_state()
+
     run = memory.get_latest_overnight_run()
     if not run or run.get("status") == "failed":
         if config.TELEGRAM_CHAT_ID:
             send_telegram(config.TELEGRAM_CHAT_ID,
                           "Overnight loop didn't run or failed. Check the logs.")
+        return
+
+    # Guard against stale overnight data (e.g., if overnight loop didn't run today)
+    started = run.get("started_at")
+    if started and started < datetime.now(timezone.utc) - timedelta(hours=6):
+        if config.TELEGRAM_CHAT_ID:
+            send_telegram(config.TELEGRAM_CHAT_ID,
+                          "Overnight loop didn't run today — last run is stale. Check the logs.")
         return
 
     results = run.get("results", {})
@@ -736,7 +765,7 @@ def _send_next_standup_item():
             f"Draft: {item['draft']}"
         )
         buttons = [
-            {"text": "✓ Send", "callback_data": f"su_send:{idx}"},
+            {"text": "✓ Save draft", "callback_data": f"su_send:{idx}"},
             {"text": "✏️ Edit", "callback_data": f"su_edit:{idx}"},
             {"text": "Skip", "callback_data": f"su_skip:{idx}"},
         ]

@@ -17,16 +17,11 @@ _scheduler_ref = {"instance": None}  # module-level reference for dynamic task r
 
 # ── Briefings ────────────────────────────────────────────────────────────────
 
-def send_morning_briefing():
+def run_overnight():
     """Run overnight ops loop. Scheduled at 3am ET."""
     import standup
     try:
-        results = standup.run_overnight_loop()
-        memory.log_activity("shams", "overnight", "Overnight loop completed", {
-            "email_reply": len(results.get("email", {}).get("reply", [])),
-            "email_archived": len(results.get("email", {}).get("archived", [])),
-            "reminders": len(results.get("reminders", [])),
-        })
+        standup.run_overnight_loop()
         logger.info("Overnight loop completed")
     except Exception as e:
         memory.log_activity("shams", "error", f"Overnight loop failed: {e}")
@@ -361,7 +356,7 @@ def init_scheduler():
 
     scheduler = BackgroundScheduler()
     _scheduler_ref["instance"] = scheduler
-    scheduler.add_job(send_morning_briefing, "cron", hour=config.OVERNIGHT_HOUR_UTC, minute=0, id="overnight_loop")
+    scheduler.add_job(run_overnight, "cron", hour=config.OVERNIGHT_HOUR_UTC, minute=0, id="overnight_loop")
     scheduler.add_job(deliver_standup, "cron", hour=config.STANDUP_HOUR_UTC, minute=0, id="morning_standup")
     scheduler.add_job(send_evening_briefing, "cron", hour=config.EVENING_HOUR_UTC, minute=0)
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
