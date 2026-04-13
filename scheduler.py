@@ -155,9 +155,12 @@ def scheduled_inbox_triage():
             for e in new_emails[:20]
         )
         prompt = (
-            f"Triage these {min(len(new_emails), 20)} emails. For EACH email:\n\n"
-            f"MESSAGE_ID: <id>\nPRIORITY: P1|P2|P3|P4\nROUTE: agent1,agent2\n"
-            f"SUMMARY: one-line\nACTION: recommended action\nDRAFT: reply or NONE\n---\n\n"
+            f"Triage these {min(len(new_emails), 20)} emails into three tiers:\n\n"
+            f"REPLY — Sender is a real person/contact, asks a question or is time-sensitive. Draft a reply.\n"
+            f"READ — Informational from a known source. No reply needed but worth seeing.\n"
+            f"ARCHIVE — Promotional, spam, automated notifications with no useful info.\n\n"
+            f"For EACH email:\n"
+            f"MESSAGE_ID: <id>\nTIER: reply|read|archive\nSUMMARY: one-line\nACTION: recommended action\nDRAFT: reply or NONE\n---\n\n"
             f"Emails:\n\n{email_text}"
         )
 
@@ -168,7 +171,7 @@ def scheduled_inbox_triage():
         result_text = response.content[0].text
         email_lookup = {e["message_id"]: e for e in new_emails}
 
-        p1_emails = []
+        reply_emails = []
         for block in result_text.split("---"):
             block = block.strip()
             if not block:
@@ -184,9 +187,9 @@ def scheduled_inbox_triage():
             if not email:
                 continue
 
-            priority = fields.get("PRIORITY", "P4")
-            if priority not in ("P1", "P2", "P3", "P4"):
-                priority = "P4"
+            tier = fields.get("TIER", "archive").lower()
+            if tier not in ("reply", "read", "archive"):
+                tier = "archive"
             route_str = fields.get("ROUTE", "shams")
             routed_to = [r.strip() for r in route_str.split(",") if r.strip()]
             action = fields.get("ACTION", "")
@@ -197,18 +200,18 @@ def scheduled_inbox_triage():
             triage_id = memory.save_triage_result(
                 account=email["account"], message_id=msg_id,
                 from_addr=email["from"], subject=email["subject"],
-                snippet=email["snippet"], priority=priority,
+                snippet=email["snippet"], tier=tier,
                 routed_to=routed_to, action=action, draft_reply=draft,
             )
 
-            if priority == "P1":
-                p1_emails.append((triage_id, email, action, draft))
+            if tier == "reply":
+                reply_emails.append((triage_id, email, action, draft))
 
-        # P1 -> immediate Telegram notification with action buttons
-        if p1_emails and config.TELEGRAM_CHAT_ID:
-            for triage_id, email, action, draft in p1_emails:
+        # Reply tier -> immediate Telegram notification with action buttons
+        if reply_emails and config.TELEGRAM_CHAT_ID:
+            for triage_id, email, action, draft in reply_emails:
                 msg = (
-                    f"P1 EMAIL\n\n"
+                    f"📬 REPLY NEEDED\n\n"
                     f"From: {email['from']}\n"
                     f"[{email['account']}] {email['subject']}\n\n"
                     f"Action: {action}"

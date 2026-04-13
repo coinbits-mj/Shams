@@ -66,3 +66,44 @@ def test_standup_state(db_conn):
     memory.clear_standup_state()
     state = memory.get_standup_state()
     assert state is None
+
+
+def test_triage_tier_parsing():
+    """Test that we correctly parse the new Reply/Read/Archive tier format."""
+    result_text = (
+        "MESSAGE_ID: abc123\n"
+        "TIER: reply\n"
+        "SUMMARY: Ahmed asking about Q2 pricing\n"
+        "ACTION: Draft reply confirming interest\n"
+        "DRAFT: Thanks Ahmed, we're interested in the Q2 pricing.\n"
+        "---\n"
+        "MESSAGE_ID: def456\n"
+        "TIER: read\n"
+        "SUMMARY: Mercury deposit notification\n"
+        "ACTION: No action needed\n"
+        "DRAFT: NONE\n"
+        "---\n"
+        "MESSAGE_ID: ghi789\n"
+        "TIER: archive\n"
+        "SUMMARY: Shopify order notification\n"
+        "ACTION: Auto-archive\n"
+        "DRAFT: NONE\n"
+    )
+    results = []
+    for block in result_text.split("---"):
+        block = block.strip()
+        if not block:
+            continue
+        fields = {}
+        for line in block.split("\n"):
+            if ":" in line:
+                k, _, v = line.partition(":")
+                fields[k.strip().upper()] = v.strip()
+        tier = fields.get("TIER", "archive")
+        assert tier in ("reply", "read", "archive"), f"Bad tier: {tier}"
+        results.append({"message_id": fields.get("MESSAGE_ID"), "tier": tier})
+
+    assert len(results) == 3
+    assert results[0]["tier"] == "reply"
+    assert results[1]["tier"] == "read"
+    assert results[2]["tier"] == "archive"

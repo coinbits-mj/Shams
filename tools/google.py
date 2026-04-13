@@ -6,7 +6,7 @@ from tools.registry import tool
 
 @tool(
     name="triage_inbox",
-    description="Triage Maher's email inbox. Fetches unread emails, classifies by priority (P1 act now, P2 today, P3 this week, P4 archive), and provides recommended actions + draft replies for important ones. Use this when Maher asks about email, inbox, or 'what needs my attention'.",
+    description="Triage Maher's email inbox. Fetches unread emails, classifies as Reply (needs response — draft included), Read (FYI, no action), or Archive (auto-archived). Use when Maher asks about email, inbox, or 'what needs my attention'.",
     schema={
         "properties": {
             "max_emails": {"type": "integer", "description": "How many unread emails to process (default 10)", "default": 10}
@@ -34,11 +34,24 @@ def triage_inbox(max_emails: int = 10) -> str:
     )
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    triage_prompt = (
+        f"Triage these {len(emails)} emails into three tiers:\n\n"
+        f"REPLY — Sender is a real person or business contact, email asks a question or "
+        f"requests something, or is time-sensitive. Draft a reply in Maher's voice (direct, concise, professional).\n"
+        f"READ — Informational from a known source (bank alerts, service notifications with useful info). "
+        f"No reply needed but Maher should see it.\n"
+        f"ARCHIVE — Promotional, marketing, automated notifications with no useful info, spam, "
+        f"newsletters Maher doesn't read.\n\n"
+        f"For EACH email, respond in this exact format:\n"
+        f"MESSAGE_ID: <id>\nTIER: reply|read|archive\nSUMMARY: one-line\nACTION: recommended action\nDRAFT: reply text or NONE\n---\n\n"
+        f"Emails:\n\n{email_text}"
+    )
+
     triage_response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=2048,
-        system=inbox_persona if inbox_persona else "Triage these emails by priority.",
-        messages=[{"role": "user", "content": f"Triage these {len(emails)} emails:\n\n{email_text}"}],
+        system=inbox_persona if inbox_persona else "Triage emails by tier: Reply, Read, or Archive.",
+        messages=[{"role": "user", "content": triage_prompt}],
     )
     result = triage_response.content[0].text
 
