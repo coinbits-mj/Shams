@@ -949,6 +949,15 @@ def _build_overview_message(results: dict) -> str:
             parts.append(f"{updated_deals} deal{'s' if updated_deals != 1 else ''} updated")
         lines.append(f"🔍 {' · '.join(parts)}")
 
+    # Daily P&L
+    try:
+        pl = memory.get_pl_daily()
+        if pl["revenue"] > 0 or pl["costs"] > 0:
+            roi = f"{pl['revenue'] / pl['costs']:.0f}x" if pl["costs"] > 0 else "∞"
+            lines.append(f"💎 Yesterday: earned ${pl['revenue']:,.2f}, cost ${pl['costs']:,.2f} — ROI: {roi}")
+    except Exception:
+        pass  # Skip P&L line if no data yet
+
     lines.append("\nWalking you through action items now ↓")
 
     return "\n".join(lines)

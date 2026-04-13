@@ -75,6 +75,24 @@ def update_deal(deal_id: int, stage: str = None, value: float = None, next_actio
     if notes is not None:
         kwargs["notes"] = notes
     memory.update_deal(deal_id, **kwargs)
+
+    # Log P&L bonus if a Scout-created deal advances past evaluating
+    if stage and stage in ("loi", "due_diligence", "closing", "closed"):
+        try:
+            deal = memory.get_deal(deal_id)
+            if deal and "scout" in (deal.get("source", "") or "").lower():
+                from standup import PL_CONFIG
+                existing = memory.get_pl_entries_by_metadata("deal_id", deal_id)
+                if not existing:
+                    memory.log_pl_revenue(
+                        "deal_advanced",
+                        PL_CONFIG["deal_advance_bonus"],
+                        f"Deal #{deal_id} advanced to {stage}: {deal.get('title', '')}",
+                        {"deal_id": deal_id, "stage": stage},
+                    )
+        except Exception:
+            pass  # Don't break deal updates if P&L logging fails
+
     memory.log_activity("shams", "deal_updated", f"Deal #{deal_id} → {kwargs.get('stage', 'updated')}")
     return f"Deal #{deal_id} updated."
 
