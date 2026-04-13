@@ -115,11 +115,15 @@ def load_whatsapp_contacts() -> dict[str, dict]:
         conn = sqlite3.connect(f"file:{WHATSAPP_CONTACTS_DB}?mode=ro", uri=True)
         cur = conn.cursor()
         cur.execute(
-            "SELECT ZWHATSAPPID, ZFULLNAME, ZPHONENUMBER FROM ZWAADDRESSBOOKCONTACT "
-            "WHERE ZWHATSAPPID IS NOT NULL AND ZFULLNAME IS NOT NULL"
+            "SELECT ZWHATSAPPID, ZLID, ZFULLNAME, ZPHONENUMBER FROM ZWAADDRESSBOOKCONTACT "
+            "WHERE ZFULLNAME IS NOT NULL AND (ZWHATSAPPID IS NOT NULL OR ZLID IS NOT NULL)"
         )
-        for wa_id, name, phone in cur.fetchall():
-            contacts[wa_id] = {"name": name, "phone": phone}
+        for wa_id, lid, name, phone in cur.fetchall():
+            entry = {"name": name, "phone": phone}
+            if wa_id:
+                contacts[wa_id] = entry
+            if lid:
+                contacts[lid] = entry
         conn.close()
     except Exception as e:
         log.error("WhatsApp contacts read failed: %s", e)
@@ -150,8 +154,8 @@ def read_whatsapp(since_timestamp: float, contacts: dict) -> list[dict]:
             if not other_jid:
                 continue
 
-            # Skip group chats (contain @g.us)
-            if "@g.us" in other_jid:
+            # Skip group chats and broadcasts
+            if "@g.us" in other_jid or "broadcast" in other_jid or "status@" in other_jid:
                 continue
 
             # Look up contact name
