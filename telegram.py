@@ -393,6 +393,11 @@ def _handle_standup_callback(action_type: str, idx: int, cb_id: str, chat_id: st
                 _ack_callback(cb_id, "Failed to save draft")
                 send_telegram(chat_id, "Failed to save draft — check Gmail connection.")
         handled[str(idx)] = "sent"
+        # Track trust
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
 
     elif action_type == "su_edit":
         # Enter edit mode — next text message from MJ is the edited version
@@ -413,6 +418,11 @@ def _handle_standup_callback(action_type: str, idx: int, cb_id: str, chat_id: st
 
     elif action_type == "su_ok":
         handled[str(idx)] = "ok"
+        # Track trust
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
         _ack_callback(cb_id, "Got it")
 
         # If it's a prep brief, save it
@@ -431,6 +441,11 @@ def _handle_standup_callback(action_type: str, idx: int, cb_id: str, chat_id: st
             priority="normal",
         )
         handled[str(idx)] = "mission"
+        # Track trust (creating a mission counts as approval)
+        from standup import STANDUP_TRUST_MAP
+        trust_type = STANDUP_TRUST_MAP.get(item.get("type", ""))
+        if trust_type:
+            memory.increment_trust_approval(trust_type)
         _ack_callback(cb_id, f"Mission #{mission_id} created")
         send_telegram(chat_id, f"Created mission #{mission_id}: {item.get('title', '')}")
 

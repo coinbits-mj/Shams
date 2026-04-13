@@ -344,3 +344,11 @@ def test_auto_approved_items_filtered_from_drip_feed():
         assert items[0]["type"] == "reminder"
         assert len(auto) == 1
         assert auto[0]["type"] == "reply"
+
+
+def test_standup_trust_map_covers_all_item_types():
+    """Test that STANDUP_TRUST_MAP covers all standup item types."""
+    from standup import STANDUP_TRUST_MAP
+    expected_types = ["reply", "prep", "reminder", "scout_outreach", "scout_info"]
+    for t in expected_types:
+        assert t in STANDUP_TRUST_MAP, f"Missing trust mapping for standup type: {t}"
