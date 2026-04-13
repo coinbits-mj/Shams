@@ -57,7 +57,10 @@ def _build_hot_context() -> str:
                 for d in decisions:
                     parts.append(f"- {d['summary']}")
         elif et_hour < 10:
-            # Morning: pending actions, overnight results
+            # Morning: overnight results + pending actions
+            overnight = memory.get_latest_overnight_run()
+            if overnight and overnight.get("summary"):
+                parts.append(f"\n## Overnight Summary\n{overnight['summary']}")
             actions = memory.get_actions(status="pending")
             if actions:
                 parts.append("\n## Pending Actions")

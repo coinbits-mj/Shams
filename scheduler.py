@@ -18,17 +18,19 @@ _scheduler_ref = {"instance": None}  # module-level reference for dynamic task r
 # ── Briefings ────────────────────────────────────────────────────────────────
 
 def send_morning_briefing():
-    import briefing
+    """Run overnight ops loop. Scheduled at 3am ET."""
+    import standup
     try:
-        text = briefing.generate_morning_briefing()
-        if config.TELEGRAM_CHAT_ID:
-            send_telegram(config.TELEGRAM_CHAT_ID, text)
-        memory.save_briefing("morning", text)
-        memory.log_activity("shams", "briefing", "Morning briefing delivered", {"type": "morning", "channel": "telegram"})
-        logger.info("Morning briefing sent")
+        results = standup.run_overnight_loop()
+        memory.log_activity("shams", "overnight", "Overnight loop completed", {
+            "email_reply": len(results.get("email", {}).get("reply", [])),
+            "email_archived": len(results.get("email", {}).get("archived", [])),
+            "reminders": len(results.get("reminders", [])),
+        })
+        logger.info("Overnight loop completed")
     except Exception as e:
-        memory.log_activity("shams", "error", f"Morning briefing failed: {e}")
-        logger.error(f"Morning briefing failed: {e}")
+        memory.log_activity("shams", "error", f"Overnight loop failed: {e}")
+        logger.error(f"Overnight loop failed: {e}")
 
 
 def send_evening_briefing():
@@ -43,6 +45,18 @@ def send_evening_briefing():
     except Exception as e:
         memory.log_activity("shams", "error", f"Evening briefing failed: {e}")
         logger.error(f"Evening briefing failed: {e}")
+
+
+def deliver_standup():
+    """Deliver morning standup via Telegram. Scheduled at 7am ET."""
+    import standup
+    try:
+        standup.deliver_morning_standup()
+        memory.log_activity("shams", "standup", "Morning standup delivered")
+        logger.info("Morning standup delivered")
+    except Exception as e:
+        memory.log_activity("shams", "error", f"Morning standup delivery failed: {e}")
+        logger.error(f"Morning standup delivery failed: {e}")
 
 
 # ── Dynamic scheduled tasks ────────────────────────────────────────────────
@@ -347,14 +361,15 @@ def init_scheduler():
 
     scheduler = BackgroundScheduler()
     _scheduler_ref["instance"] = scheduler
-    scheduler.add_job(send_morning_briefing, "cron", hour=config.BRIEFING_HOUR_UTC, minute=0)
+    scheduler.add_job(send_morning_briefing, "cron", hour=config.OVERNIGHT_HOUR_UTC, minute=0, id="overnight_loop")
+    scheduler.add_job(deliver_standup, "cron", hour=config.STANDUP_HOUR_UTC, minute=0, id="morning_standup")
     scheduler.add_job(send_evening_briefing, "cron", hour=config.EVENING_HOUR_UTC, minute=0)
     scheduler.add_job(scheduled_inbox_triage, "interval", minutes=30, id="inbox_triage")
     scheduler.add_job(agent_health_check, "interval", minutes=5, id="health_check")
     scheduler.add_job(mission_stale_check, "cron", hour=12, minute=0, id="stale_check")  # noon UTC
     scheduler.add_job(smart_alerts_check, "interval", hours=1, id="smart_alerts")  # every hour
     scheduler.start()
-    logger.info(f"Scheduler started — morning @ {config.BRIEFING_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
+    logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
     logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily)")
 
     # Load dynamic tasks from database
