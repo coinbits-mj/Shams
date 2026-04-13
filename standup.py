@@ -732,6 +732,10 @@ def _build_overnight_summary(results: dict) -> str:
     if reminders:
         parts.append(f"Reminders: {len(reminders)} items")
 
+    scout = results.get("scout", {})
+    if scout.get("findings"):
+        parts.append(f"Scout: {len(scout['findings'])} findings, {scout.get('new_deals', 0)} new deals")
+
     return " | ".join(parts)
 
 
@@ -847,6 +851,18 @@ def _build_overview_message(results: dict) -> str:
     if reminders:
         lines.append(f"🔔 {len(reminders)} things you might be forgetting")
 
+    # Scout
+    scout = results.get("scout", {})
+    new_deals = scout.get("new_deals", 0)
+    updated_deals = scout.get("updated_deals", 0)
+    if new_deals or updated_deals:
+        parts = []
+        if new_deals:
+            parts.append(f"{new_deals} new lead{'s' if new_deals != 1 else ''}")
+        if updated_deals:
+            parts.append(f"{updated_deals} deal{'s' if updated_deals != 1 else ''} updated")
+        lines.append(f"🔍 {' · '.join(parts)}")
+
     lines.append("\nWalking you through action items now ↓")
 
     return "\n".join(lines)
@@ -892,6 +908,29 @@ def _build_action_items(results: dict) -> list[dict]:
             "loop_id": r.get("loop_id"),
             "action_id": r.get("action_id"),
         })
+
+    # 4. Scout findings (high-score with outreach, then informational)
+    scout = results.get("scout", {})
+    for f in scout.get("findings", []):
+        if f.get("score", 0) >= 8 and f.get("outreach"):
+            items.append({
+                "type": "scout_outreach",
+                "title": f.get("title", ""),
+                "finding_type": f.get("type", ""),
+                "score": f.get("score", 0),
+                "summary": f.get("summary", ""),
+                "outreach": f.get("outreach", ""),
+                "deal_id": f.get("deal_id"),
+            })
+        elif f.get("score", 0) >= 6:
+            items.append({
+                "type": "scout_info",
+                "title": f.get("title", ""),
+                "finding_type": f.get("type", ""),
+                "score": f.get("score", 0),
+                "summary": f.get("summary", ""),
+                "deal_id": f.get("deal_id"),
+            })
 
     return items
 
@@ -956,6 +995,33 @@ def _send_next_standup_item():
             pass  # Already a mission
         else:
             buttons.append({"text": "Create mission", "callback_data": f"su_mission:{idx}"})
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+    elif item["type"] == "scout_outreach":
+        msg = (
+            f"🔍 Scout: {item['title']}\n"
+            f"{item['summary']}\n"
+            f"Score: {item['score']}/10\n\n"
+            f"Draft outreach: {item['outreach']}"
+        )
+        buttons = [
+            {"text": "✓ Save draft", "callback_data": f"su_ok:{idx}"},
+            {"text": "✏️ Edit", "callback_data": f"su_edit:{idx}"},
+            {"text": "Skip", "callback_data": f"su_skip:{idx}"},
+            {"text": "Create mission", "callback_data": f"su_mission:{idx}"},
+        ]
+        send_telegram_with_buttons(chat_id, msg, buttons)
+
+    elif item["type"] == "scout_info":
+        msg = (
+            f"🔍 Scout: {item['title']}\n"
+            f"{item['summary']}\n"
+            f"Score: {item['score']}/10"
+        )
+        buttons = [
+            {"text": "Got it", "callback_data": f"su_ok:{idx}"},
+            {"text": "Create mission", "callback_data": f"su_mission:{idx}"},
+        ]
         send_telegram_with_buttons(chat_id, msg, buttons)
 
 

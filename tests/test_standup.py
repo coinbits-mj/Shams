@@ -263,3 +263,29 @@ def test_scout_sweep_structure():
         assert "new_deals" in result
         assert "updated_deals" in result
         mock_call.assert_called_once()
+
+
+def test_overview_message_includes_scout():
+    """Test that overview message includes Scout findings."""
+    import standup
+
+    results = {
+        "email": {"reply": [], "read": [], "archived": [], "archive_summary": ""},
+        "mercury": {"balances": {}, "grand_total": 0, "alerts": []},
+        "rumi": {},
+        "calendar": {"events": [], "prep_briefs": []},
+        "reminders": [],
+        "scout": {
+            "findings": [
+                {"title": "Test Lead", "score": 8, "type": "acquisition"},
+                {"title": "Updated Deal", "score": 6, "type": "real_estate"},
+            ],
+            "searches_run": 5,
+            "new_deals": 2,
+            "updated_deals": 1,
+        },
+    }
+
+    msg = standup._build_overview_message(results)
+    assert "2 new leads" in msg or "2 leads" in msg
+    assert "1 deal updated" in msg or "1 updated" in msg
