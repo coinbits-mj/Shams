@@ -802,3 +802,38 @@ def _finish_standup(state: dict):
         send_telegram(config.TELEGRAM_CHAT_ID, f"✅ Standup done. {summary}. Have a good one.")
 
     memory.clear_standup_state()
+
+
+# ── Evening Briefing (kept from briefing.py) ───────────────────────────────
+
+
+def generate_evening_briefing() -> str:
+    """Generate an evening wrap-up briefing."""
+    import claude_client
+    import leo_client
+
+    parts = []
+
+    # Tomorrow's calendar
+    events = google_client.get_upcoming_events(1)
+    if events:
+        parts.append("## Tomorrow's Calendar")
+        for e in events:
+            parts.append(f"- {e['start']} — {e['summary']}")
+
+    # MTD P&L
+    mtd = rumi_client.get_monthly_pl()
+    if mtd:
+        parts.append(f"\n## MTD P&L")
+        parts.append(f"- Revenue: ${mtd.get('revenue', 0):,.0f}")
+        parts.append(f"- Net margin: {mtd.get('net_margin_pct', 0):.1f}%")
+
+    # Open loops
+    loops = memory.get_open_loops()
+    if loops:
+        parts.append("\n## Open Loops (still open)")
+        for loop in loops:
+            parts.append(f"- [{loop['id']}] {loop['title']}")
+
+    context = "\n".join(parts)
+    return claude_client.generate_briefing("evening", context)

@@ -34,9 +34,9 @@ def send_morning_briefing():
 
 
 def send_evening_briefing():
-    import briefing
+    import standup
     try:
-        text = briefing.generate_evening_briefing()
+        text = standup.generate_evening_briefing()
         if config.TELEGRAM_CHAT_ID:
             send_telegram(config.TELEGRAM_CHAT_ID, text)
         memory.save_briefing("evening", text)
