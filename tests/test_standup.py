@@ -390,3 +390,65 @@ def test_pl_revenue_amount_for_emails():
     minutes = count * PL_CONFIG["time_values"]["email_triage"]
     amount = round((minutes / 60) * hourly, 4)
     assert amount == 20.8333
+
+
+def test_warmth_score_calculation():
+    """Test warmth score decay and boost logic."""
+    from standup import _calculate_warmth
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+
+    # Fresh contact — should be ~100
+    score = _calculate_warmth(
+        last_inbound=now - timedelta(hours=1),
+        last_outbound=now - timedelta(hours=2),
+        last_meeting=None,
+        touchpoint_count=5,
+        channels=["email"],
+        has_active_deal=False,
+    )
+    assert score >= 95
+
+    # 20 days silent — should be cooling
+    score = _calculate_warmth(
+        last_inbound=now - timedelta(days=20),
+        last_outbound=now - timedelta(days=22),
+        last_meeting=None,
+        touchpoint_count=5,
+        channels=["email"],
+        has_active_deal=False,
+    )
+    assert 25 <= score <= 50
+
+    # 40 days silent — should be cold
+    score = _calculate_warmth(
+        last_inbound=now - timedelta(days=40),
+        last_outbound=None,
+        last_meeting=None,
+        touchpoint_count=3,
+        channels=["email"],
+        has_active_deal=False,
+    )
+    assert score < 25
+
+    # Active deal — warmth floor of 20
+    score = _calculate_warmth(
+        last_inbound=now - timedelta(days=60),
+        last_outbound=None,
+        last_meeting=None,
+        touchpoint_count=2,
+        channels=["email"],
+        has_active_deal=True,
+    )
+    assert score >= 20
+
+
+def test_contact_noise_filtering():
+    """Test that noise contacts are filtered out."""
+    from standup import _is_noise_contact
+    assert _is_noise_contact("noreply@shopify.com") is True
+    assert _is_noise_contact("notifications@github.com") is True
+    assert _is_noise_contact("support@squareup.com") is True
+    assert _is_noise_contact("ahmed@cafeimports.com") is False
+    assert _is_noise_contact("maher@qcitycoffee.com") is False

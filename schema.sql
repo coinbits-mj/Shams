@@ -358,3 +358,37 @@ CREATE TABLE IF NOT EXISTS shams_pl_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_pl_entries_date ON shams_pl_entries (date DESC);
 CREATE INDEX IF NOT EXISTS idx_pl_entries_type ON shams_pl_entries (entry_type, date DESC);
+
+CREATE TABLE IF NOT EXISTS shams_contacts (
+    id              SERIAL PRIMARY KEY,
+    name            VARCHAR(255) NOT NULL,
+    email           VARCHAR(255),
+    phone           VARCHAR(50),
+    whatsapp_jid    VARCHAR(100),
+    source          VARCHAR(50) DEFAULT 'email',
+    channels        TEXT[] DEFAULT '{}',
+    last_inbound    TIMESTAMPTZ,
+    last_outbound   TIMESTAMPTZ,
+    last_meeting    TIMESTAMPTZ,
+    touchpoint_count INTEGER DEFAULT 0,
+    warmth_score    INTEGER DEFAULT 50,
+    deal_id         INTEGER,
+    notes           TEXT DEFAULT '',
+    snoozed_until   TIMESTAMPTZ,
+    auto_discovered BOOLEAN DEFAULT TRUE,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_email ON shams_contacts (email) WHERE email IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_contacts_phone ON shams_contacts (phone);
+CREATE INDEX IF NOT EXISTS idx_contacts_warmth ON shams_contacts (warmth_score);
+
+CREATE TABLE IF NOT EXISTS shams_bridge_commands (
+    id          SERIAL PRIMARY KEY,
+    channel     VARCHAR(20) NOT NULL CHECK (channel IN ('imessage', 'whatsapp', 'email')),
+    recipient   VARCHAR(255) NOT NULL,
+    message     TEXT NOT NULL,
+    status      VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'failed')),
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    executed_at TIMESTAMPTZ
+);

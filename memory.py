@@ -1124,3 +1124,139 @@ def get_pl_entries_by_metadata(key: str, value) -> list[dict]:
             (key, str(value)),
         )
         return cur.fetchall()
+
+
+# ── Contacts (Relationship Intelligence) ───────────────────────────────────
+
+def upsert_contact(name: str, email: str | None = None, phone: str | None = None,
+                   source: str = "email", channel: str = "email",
+                   direction: str = "inbound", deal_id: int | None = None) -> int:
+    """Create or update a contact. Returns contact ID."""
+    with get_conn() as conn, conn.cursor() as cur:
+        if email:
+            cur.execute(f"SELECT id, channels FROM {P}contacts WHERE email = %s", (email,))
+        elif phone:
+            cur.execute(f"SELECT id, channels FROM {P}contacts WHERE phone = %s", (phone,))
+        else:
+            return 0
+
+        row = cur.fetchone()
+        now_field = "last_inbound" if direction == "inbound" else "last_outbound"
+
+        if row:
+            contact_id = row[0]
+            existing_channels = row[1] or []
+            if channel not in existing_channels:
+                existing_channels.append(channel)
+            cur.execute(
+                f"UPDATE {P}contacts SET {now_field} = NOW(), touchpoint_count = touchpoint_count + 1, "
+                f"channels = %s, updated_at = NOW() "
+                + (f", deal_id = %s" if deal_id else "") +
+                f" WHERE id = %s",
+                (existing_channels, deal_id, contact_id) if deal_id else (existing_channels, contact_id),
+            )
+            return contact_id
+        else:
+            cur.execute(
+                f"INSERT INTO {P}contacts (name, email, phone, source, channels, {now_field}, touchpoint_count, deal_id) "
+                f"VALUES (%s, %s, %s, %s, %s, NOW(), 1, %s) RETURNING id",
+                (name, email, phone, source, [channel], deal_id),
+            )
+            return cur.fetchone()[0]
+
+
+def update_contact_meeting(email: str):
+    """Update last_meeting timestamp for a contact by email."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}contacts SET last_meeting = NOW(), touchpoint_count = touchpoint_count + 1, "
+            f"updated_at = NOW() WHERE email = %s",
+            (email,),
+        )
+        cur.execute(
+            f"UPDATE {P}contacts SET channels = array_append(channels, 'calendar') "
+            f"WHERE email = %s AND NOT ('calendar' = ANY(channels))",
+            (email,),
+        )
+
+
+def update_all_warmth_scores():
+    """Recalculate warmth scores for all contacts."""
+    from standup import _calculate_warmth
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}contacts")
+        contacts = cur.fetchall()
+
+        # Get active deal IDs
+        cur.execute(f"SELECT id FROM {P}deals WHERE stage NOT IN ('closed', 'dead')")
+        active_deal_ids = {r["id"] for r in cur.fetchall()}
+
+    with get_conn() as conn, conn.cursor() as cur:
+        for c in contacts:
+            has_deal = c.get("deal_id") in active_deal_ids if c.get("deal_id") else False
+            score = _calculate_warmth(
+                last_inbound=c.get("last_inbound"),
+                last_outbound=c.get("last_outbound"),
+                last_meeting=c.get("last_meeting"),
+                touchpoint_count=c.get("touchpoint_count", 0),
+                channels=c.get("channels", []),
+                has_active_deal=has_deal,
+            )
+            cur.execute(
+                f"UPDATE {P}contacts SET warmth_score = %s, updated_at = NOW() WHERE id = %s",
+                (score, c["id"]),
+            )
+
+
+def get_cooling_contacts(threshold: int = 49) -> list[dict]:
+    """Get contacts with warmth score at or below threshold, excluding snoozed."""
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}contacts WHERE warmth_score <= %s "
+            f"AND touchpoint_count >= 2 "
+            f"AND (snoozed_until IS NULL OR snoozed_until < NOW()) "
+            f"ORDER BY warmth_score ASC LIMIT 10",
+            (threshold,),
+        )
+        return cur.fetchall()
+
+
+def snooze_contact(contact_id: int, days: int = 7):
+    """Snooze a contact from relationship alerts for N days."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}contacts SET snoozed_until = NOW() + INTERVAL '%s days', updated_at = NOW() WHERE id = %s",
+            (days, contact_id),
+        )
+
+
+def get_contact_count() -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM {P}contacts WHERE touchpoint_count >= 2")
+        return cur.fetchone()[0]
+
+
+def queue_bridge_command(channel: str, recipient: str, message: str) -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}bridge_commands (channel, recipient, message) "
+            f"VALUES (%s, %s, %s) RETURNING id",
+            (channel, recipient, message),
+        )
+        return cur.fetchone()[0]
+
+
+def get_pending_bridge_commands() -> list[dict]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}bridge_commands WHERE status = 'pending' ORDER BY created_at"
+        )
+        return cur.fetchall()
+
+
+def ack_bridge_command(command_id: int, status: str = "sent"):
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}bridge_commands SET status = %s, executed_at = NOW() WHERE id = %s",
+            (status, command_id),
+        )

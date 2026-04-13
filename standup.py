@@ -82,6 +82,77 @@ def _log_revenue(category: str, count: int, description: str = ""):
     memory.log_pl_revenue(category, amount, description, {"count": count, "minutes": minutes})
 
 
+# ── Relationship intelligence ──────────────────────────────────────────────
+
+NOISE_DOMAINS = {
+    "shopify.com", "squareup.com", "klaviyo.com", "recharge.io",
+    "github.com", "railway.app", "google.com", "apple.com",
+    "amazonses.com", "sendgrid.net", "mailchimp.com", "stripe.com",
+    "paypal.com", "intuit.com", "quickbooks.com",
+}
+
+NOISE_PREFIXES = {"noreply", "no-reply", "notifications", "support", "info", "mailer-daemon", "postmaster"}
+
+
+def _is_noise_contact(email: str) -> bool:
+    """Check if an email address is noise (automated sender, not a real relationship)."""
+    if not email:
+        return True
+    email = email.lower().strip()
+    local = email.split("@")[0] if "@" in email else ""
+    domain = email.split("@")[1] if "@" in email else ""
+    if local in NOISE_PREFIXES:
+        return True
+    if domain in NOISE_DOMAINS:
+        return True
+    return False
+
+
+def _calculate_warmth(
+    last_inbound: datetime | None,
+    last_outbound: datetime | None,
+    last_meeting: datetime | None,
+    touchpoint_count: int,
+    channels: list[str],
+    has_active_deal: bool,
+) -> int:
+    """Calculate warmth score 0-100 for a contact."""
+    now = datetime.now(timezone.utc)
+
+    # Find most recent touchpoint
+    timestamps = [t for t in [last_inbound, last_outbound, last_meeting] if t]
+    if not timestamps:
+        return 0
+
+    for i, ts in enumerate(timestamps):
+        if ts.tzinfo is None:
+            timestamps[i] = ts.replace(tzinfo=timezone.utc)
+
+    latest = max(timestamps)
+    days_since = (now - latest).days
+
+    # Decay rate: frequent contacts decay slower
+    decay_rate = 1.5 if touchpoint_count > 12 else 3.0
+    base = max(0, 100 - (days_since * decay_rate))
+
+    # Direction boost: inbound more recent than outbound = they're engaging
+    if last_inbound and last_outbound:
+        li = last_inbound if last_inbound.tzinfo else last_inbound.replace(tzinfo=timezone.utc)
+        lo = last_outbound if last_outbound.tzinfo else last_outbound.replace(tzinfo=timezone.utc)
+        if li > lo:
+            base = min(100, base + 5)
+
+    # Multi-channel bonus
+    if len(channels) >= 2:
+        base = min(100, base + 10)
+
+    # Deal floor
+    if has_active_deal:
+        base = max(20, base)
+
+    return int(base)
+
+
 # ── Overnight Loop ─────────────────────────────────────────────────────────
 
 
