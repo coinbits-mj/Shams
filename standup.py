@@ -45,6 +45,7 @@ def run_overnight_loop() -> dict:
         "rumi": {"revenue": 0, "cogs": 0, "margin": 0, "orders": 0, "alerts": [], "action_items": []},
         "calendar": {"events": [], "prep_briefs": [], "conflicts": []},
         "reminders": [],
+        "scout": {"findings": [], "searches_run": 0, "new_deals": 0, "updated_deals": 0},
     }
     status = "completed"
 
@@ -101,6 +102,19 @@ def run_overnight_loop() -> dict:
         })
     except Exception as e:
         logger.error(f"Overnight forgetting check failed: {e}", exc_info=True)
+        status = "partial"
+
+    # Step 6: Scout research sweep
+    try:
+        results["scout"] = _step_scout_sweep()
+        memory.log_activity("scout", "overnight", "Scout sweep complete", {
+            "findings": len(results["scout"]["findings"]),
+            "new_deals": results["scout"]["new_deals"],
+            "searches_run": results["scout"]["searches_run"],
+        })
+    except Exception as e:
+        logger.error(f"Overnight Scout sweep failed: {e}", exc_info=True)
+        results["scout"] = {"findings": [], "searches_run": 0, "new_deals": 0, "updated_deals": 0}
         status = "partial"
 
     # Save results
@@ -546,6 +560,149 @@ def _draft_reminder_work_product(reminders: list[dict]):
         draft = drafts.get(r["title"].lower(), "")
         if draft:
             r["draft"] = draft
+
+
+# ── Scout sweep ────────────────────────────────────────────────────────────
+
+
+def _step_scout_sweep() -> dict:
+    """Run Scout's daily research sweep across all 6 domains."""
+    result = _call_scout()
+    return result
+
+
+def _call_scout() -> dict:
+    """Call the Scout agent with a research prompt and parse results."""
+    from agents.registry import call_agent
+
+    # Determine which rotating queries to run today (cycle by day of week)
+    rotating_queries = [
+        '"coffee roaster" restructuring OR closing NJ',
+        'NJ small business acquisition opportunities',
+        'commercial real estate coffee Middlesex OR Union OR Passaic county',
+        'specialty coffee M&A 2026',
+        'NJ small business grants OR incentives 2026',
+        'coffee equipment auction OR liquidation NJ NY',
+        'new coffee roaster opening NJ',
+    ]
+    day_of_week = datetime.now(timezone.utc).weekday()  # 0=Monday
+    # Pick 2 rotating queries based on day
+    rotate_start = (day_of_week * 2) % len(rotating_queries)
+    todays_rotating = [
+        rotating_queries[rotate_start % len(rotating_queries)],
+        rotating_queries[(rotate_start + 1) % len(rotating_queries)],
+    ]
+
+    core_queries = [
+        '"coffee roaster for sale" OR "cafe for sale" NJ 2026',
+        'commercial space lease Somerville OR Clifton OR Plainfield NJ',
+        'specialty coffee industry news',
+    ]
+    all_queries = core_queries + todays_rotating
+
+    # Build existing deals context for dedup
+    existing_deals = memory.get_deals(limit=50)
+    deals_context = ""
+    if existing_deals:
+        deals_context = "\n\nExisting deals in pipeline (check before creating duplicates):\n"
+        for d in existing_deals:
+            deals_context += f"- #{d['id']} [{d.get('stage', '?')}] {d['title']}"
+            if d.get("location"):
+                deals_context += f" ({d['location']})"
+            deals_context += "\n"
+
+    prompt = (
+        f"Run your daily research sweep. Search each of these queries using web_search, "
+        f"then follow up on promising results with fetch_url.\n\n"
+        f"Queries to search:\n"
+        + "\n".join(f"- {q}" for q in all_queries)
+        + f"\n{deals_context}\n"
+        f"For each finding worth tracking:\n"
+        f"1. Check existing deals with list_deals to avoid duplicates\n"
+        f"2. If it's new and scores 6+, create it with create_deal\n"
+        f"3. If it matches an existing deal, update it with update_deal (add a note)\n"
+        f"4. For deals scored 8+, include a draft outreach message in the notes\n\n"
+        f"Score findings 1-10 based on: relevance to QCC, financial fit, location, timing.\n\n"
+        f"After all searches, summarize your findings in this exact format "
+        f"(one block per finding, separated by ---):\n\n"
+        f"FINDING: <title>\n"
+        f"TYPE: acquisition|real_estate|partnership|vendor|regulatory|competitor\n"
+        f"SCORE: <1-10>\n"
+        f"DEAL_ID: <id if created, or EXISTING:<id> if updated, or SKIP if below 6>\n"
+        f"SUMMARY: <one paragraph>\n"
+        f"OUTREACH: <draft message or NONE>\n"
+        f"---"
+    )
+
+    # Call Scout agent — it has web_search, fetch_url, create_deal, update_deal, list_deals
+    scout_response = call_agent("scout", prompt)
+
+    # Parse findings from Scout's response
+    findings = []
+    new_deals = 0
+    updated_deals = 0
+
+    for block in scout_response.split("---"):
+        block = block.strip()
+        if not block:
+            continue
+
+        fields = {}
+        current_key = None
+        for line in block.split("\n"):
+            matched = False
+            for key in ("FINDING", "TYPE", "SCORE", "DEAL_ID", "SUMMARY", "OUTREACH"):
+                if line.upper().startswith(key + ":"):
+                    _, _, v = line.partition(":")
+                    fields[key] = v.strip()
+                    current_key = key
+                    matched = True
+                    break
+            if not matched and current_key in ("SUMMARY", "OUTREACH"):
+                fields[current_key] = fields.get(current_key, "") + "\n" + line
+
+        if not fields.get("FINDING"):
+            continue
+
+        try:
+            score = int(fields.get("SCORE", "0"))
+        except ValueError:
+            score = 0
+
+        deal_id_raw = fields.get("DEAL_ID", "")
+        deal_id = None
+        if deal_id_raw.startswith("EXISTING:"):
+            try:
+                deal_id = int(deal_id_raw.split(":")[1])
+            except (ValueError, IndexError):
+                pass
+            updated_deals += 1
+        elif deal_id_raw not in ("SKIP", ""):
+            try:
+                deal_id = int(deal_id_raw)
+            except ValueError:
+                pass
+            new_deals += 1
+
+        outreach = fields.get("OUTREACH", "").strip()
+        if outreach.upper() == "NONE":
+            outreach = ""
+
+        findings.append({
+            "title": fields.get("FINDING", ""),
+            "type": fields.get("TYPE", "other"),
+            "score": score,
+            "deal_id": deal_id,
+            "summary": fields.get("SUMMARY", "").strip(),
+            "outreach": outreach,
+        })
+
+    return {
+        "findings": findings,
+        "searches_run": len(all_queries),
+        "new_deals": new_deals,
+        "updated_deals": updated_deals,
+    }
 
 
 # ── Summary builder ────────────────────────────────────────────────────────

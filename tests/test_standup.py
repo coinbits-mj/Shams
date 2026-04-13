@@ -238,3 +238,28 @@ def test_deal_tools_available_to_scout():
     assert "list_deals" in tool_names
     assert "web_search" in tool_names
     assert "fetch_url" in tool_names
+
+
+def test_scout_sweep_structure():
+    """Test that _step_scout_sweep returns structured results."""
+    from unittest.mock import patch, MagicMock
+    import standup
+
+    with patch("standup.memory") as mock_memory, \
+         patch("standup._call_scout") as mock_call:
+
+        mock_memory.get_deals.return_value = []
+        mock_call.return_value = {
+            "findings": [],
+            "searches_run": 5,
+            "new_deals": 0,
+            "updated_deals": 0,
+        }
+
+        result = standup._step_scout_sweep()
+
+        assert "findings" in result
+        assert "searches_run" in result
+        assert "new_deals" in result
+        assert "updated_deals" in result
+        mock_call.assert_called_once()
