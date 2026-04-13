@@ -380,3 +380,13 @@ def test_pl_cost_calculation():
     cost = (100_000 / 1_000_000 * pricing["input_per_million"]) + \
            (20_000 / 1_000_000 * pricing["output_per_million"])
     assert round(cost, 4) == 0.6
+
+
+def test_pl_revenue_amount_for_emails():
+    """Test revenue calculation for email triage."""
+    from standup import PL_CONFIG
+    hourly = PL_CONFIG["hourly_rate"]
+    count = 10
+    minutes = count * PL_CONFIG["time_values"]["email_triage"]
+    amount = round((minutes / 60) * hourly, 4)
+    assert amount == 20.8333

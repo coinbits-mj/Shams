@@ -71,6 +71,17 @@ PL_CONFIG = {
 }
 
 
+def _log_revenue(category: str, count: int, description: str = ""):
+    """Log P&L revenue for a batch of actions."""
+    if count <= 0:
+        return
+    minutes = count * PL_CONFIG["time_values"].get(category, 0)
+    if minutes <= 0:
+        return
+    amount = round((minutes / 60) * PL_CONFIG["hourly_rate"], 4)
+    memory.log_pl_revenue(category, amount, description, {"count": count, "minutes": minutes})
+
+
 # ── Overnight Loop ─────────────────────────────────────────────────────────
 
 
@@ -309,6 +320,11 @@ def _step_email_sweep() -> dict:
         )
         archive_summary = summary_resp.content[0].text
 
+    # Log P&L revenue
+    total_triaged = len(reply_list) + len(read_list) + len(archived_list)
+    _log_revenue("email_triage", total_triaged, f"{total_triaged} emails triaged")
+    _log_revenue("draft_reply", len(reply_list), f"{len(reply_list)} draft replies written")
+
     return {
         "reply": reply_list,
         "read": read_list,
@@ -467,6 +483,9 @@ def _step_calendar_scan() -> dict:
             if fields.get("event") and fields.get("brief"):
                 prep_briefs.append(fields)
 
+    # Log P&L revenue
+    _log_revenue("prep_brief", len(prep_briefs), f"{len(prep_briefs)} prep briefs drafted")
+
     return {
         "events": formatted_events,
         "prep_briefs": prep_briefs,
@@ -566,6 +585,9 @@ def _step_forgetting_check() -> list[dict]:
     if reminders and any(r["type"] in ("stale_mission", "deadline") for r in reminders):
         _draft_reminder_work_product(reminders)
 
+    # Log P&L revenue
+    _log_revenue("reminder", len(reminders), f"{len(reminders)} reminders caught")
+
     return reminders
 
 
@@ -616,6 +638,9 @@ def _draft_reminder_work_product(reminders: list[dict]):
 def _step_scout_sweep() -> dict:
     """Run Scout's daily research sweep across all 6 domains."""
     result = _call_scout()
+    # Log P&L revenue
+    findings_count = len(result.get("findings", []))
+    _log_revenue("scout_finding", findings_count, f"{findings_count} Scout findings")
     return result
 
 
@@ -1034,6 +1059,9 @@ def _execute_auto_approved(items: list[dict]):
                 memory.log_activity("shams", "auto_approved", f"Scout finding auto-acked: {item.get('title', '')}")
         except Exception as e:
             logger.error(f"Auto-approve execution failed for {item.get('type')}: {e}")
+
+    # Log P&L revenue for auto-approved items
+    _log_revenue("auto_approve", len(items), f"{len(items)} actions auto-approved")
 
 
 def _build_auto_approve_summary(items: list[dict]) -> str:
