@@ -197,6 +197,17 @@ def chat(user_message: str, images: list | None = None) -> str:
             messages=messages,
         )
 
+        # Log API cost
+        if hasattr(response, 'usage') and response.usage:
+            try:
+                memory.log_pl_cost(
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    context="chat",
+                )
+            except Exception:
+                pass  # Don't break chat if P&L logging fails
+
         # If Claude is done (no tool calls), extract text and return
         if response.stop_reason == "end_turn":
             text_parts = [b.text for b in response.content if b.type == "text"]
@@ -254,6 +265,17 @@ def generate_briefing(briefing_type: str, context: str = "") -> str:
             tools=get_tool_definitions(),
             messages=messages,
         )
+
+        # Log API cost
+        if hasattr(response, 'usage') and response.usage:
+            try:
+                memory.log_pl_cost(
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                    context=f"briefing:{briefing_type}",
+                )
+            except Exception:
+                pass
 
         if response.stop_reason == "end_turn":
             text_parts = [b.text for b in response.content if b.type == "text"]

@@ -141,6 +141,18 @@ def call_agent(
                 kwargs["tools"] = tools
 
             response = client.messages.create(**kwargs)
+
+            # Log API cost
+            if hasattr(response, 'usage') and response.usage:
+                try:
+                    import memory as _mem
+                    _mem.log_pl_cost(
+                        input_tokens=response.usage.input_tokens,
+                        output_tokens=response.usage.output_tokens,
+                        context=f"agent:{agent_name}",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("Agent %s API error: %s", agent_name, e)
             return f"Error from {agent_name}: {e}"
