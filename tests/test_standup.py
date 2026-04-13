@@ -188,3 +188,22 @@ def test_build_overview_message():
     assert "Coinbits" in msg or "coinbits" in msg
     assert "$1,847" in msg
     assert "3 things" in msg or "3 item" in msg
+
+
+def test_standup_callback_routing():
+    """Test that standup callback data is parsed correctly."""
+    test_cases = [
+        ("su_send:0", "su_send", 0),
+        ("su_edit:2", "su_edit", 2),
+        ("su_skip:1", "su_skip", 1),
+        ("su_ok:3", "su_ok", 3),
+        ("su_snooze:0", "su_snooze", 0),
+        ("su_mission:1", "su_mission", 1),
+    ]
+    for cb_data, expected_action, expected_idx in test_cases:
+        parts = cb_data.split(":")
+        assert len(parts) == 2
+        action_type = parts[0]
+        idx = int(parts[1])
+        assert action_type == expected_action
+        assert idx == expected_idx

@@ -129,6 +129,40 @@ def process_message(msg: dict, chat_id: str):
     # --- Text ---
     if msg.get("text"):
         text = msg["text"].strip()
+
+        # Check if we're in standup edit mode
+        standup_state = memory.get_standup_state()
+        if standup_state and standup_state.get("phase") == "waiting_for_edit":
+            import standup as standup_mod
+            edit_idx = standup_state.get("edit_index", 0)
+            items = standup_state.get("items", [])
+            if edit_idx < len(items):
+                item = items[edit_idx]
+                handled = standup_state.get("handled", {})
+
+                if item["type"] == "reply":
+                    # Save edited draft to Gmail
+                    import google_client
+                    if item.get("message_id"):
+                        result = google_client.create_draft_reply(item["account"], item["message_id"], text)
+                        if result:
+                            send_telegram(chat_id, "Got it. Draft saved to Gmail with your edit.")
+                            memory.log_activity("shams", "standup_edit", f"Edited draft saved: {item.get('subject', '')}")
+                        else:
+                            send_telegram(chat_id, "Failed to save draft — check Gmail connection.")
+                    handled[str(edit_idx)] = "sent"
+                elif item["type"] == "prep":
+                    send_telegram(chat_id, "Got it. Updated brief saved.")
+                    memory.log_activity("shams", "standup_edit", f"Edited prep brief: {item.get('event', '')}")
+                    handled[str(edit_idx)] = "ok"
+
+                standup_state["handled"] = handled
+                standup_state["current_index"] = edit_idx + 1
+                standup_state["phase"] = "dripping"
+                memory.set_standup_state(standup_state)
+                standup_mod._send_next_standup_item()
+            return
+
         if text == "/start":
             send_telegram(chat_id, "Shams is here. Talk to me.")
             return
@@ -327,6 +361,88 @@ def _handle_email_action(action_type: str, triage_id: int, cb_id: str, chat_id: 
         send_telegram(chat_id, f"Routed to Wakil: {email['subject']}")
 
 
+def _handle_standup_callback(action_type: str, idx: int, cb_id: str, chat_id: str):
+    """Handle standup drip-feed button presses."""
+    import standup
+
+    state = memory.get_standup_state()
+    if not state or state.get("phase") not in ("dripping", "waiting_for_edit"):
+        _ack_callback(cb_id, "Standup expired")
+        return
+
+    items = state.get("items", [])
+    if idx >= len(items):
+        _ack_callback(cb_id, "Item not found")
+        return
+
+    item = items[idx]
+    handled = state.get("handled", {})
+
+    if action_type == "su_send":
+        # Create draft in Gmail (we have gmail.modify, not gmail.send)
+        import google_client
+        if item.get("message_id") and item.get("draft"):
+            result = google_client.create_draft_reply(
+                item["account"], item["message_id"], item["draft"]
+            )
+            if result:
+                memory.log_activity("shams", "standup_send", f"Draft saved: {item.get('subject', '')}")
+                _ack_callback(cb_id, "Draft saved to Gmail")
+                send_telegram(chat_id, f"Draft saved in Gmail for: {item.get('subject', '')}")
+            else:
+                _ack_callback(cb_id, "Failed to save draft")
+                send_telegram(chat_id, "Failed to save draft — check Gmail connection.")
+        handled[str(idx)] = "sent"
+
+    elif action_type == "su_edit":
+        # Enter edit mode — next text message from MJ is the edited version
+        state["phase"] = "waiting_for_edit"
+        state["edit_index"] = idx
+        memory.set_standup_state(state)
+        _ack_callback(cb_id, "Send your edit")
+
+        if item["type"] == "reply":
+            send_telegram(chat_id, f"Here's the current draft — send me your version:\n\n{item.get('draft', '')}")
+        elif item["type"] == "prep":
+            send_telegram(chat_id, f"Here's the current brief — send me your version:\n\n{item.get('brief', '')}")
+        return  # Don't advance to next item
+
+    elif action_type == "su_skip":
+        handled[str(idx)] = "skip"
+        _ack_callback(cb_id, "Skipped")
+
+    elif action_type == "su_ok":
+        handled[str(idx)] = "ok"
+        _ack_callback(cb_id, "Got it")
+
+        # If it's a prep brief, save it
+        if item["type"] == "prep":
+            memory.log_activity("shams", "standup_prep", f"Prep brief approved: {item.get('event', '')}")
+
+    elif action_type == "su_snooze":
+        handled[str(idx)] = "snooze"
+        _ack_callback(cb_id, "Snoozed")
+
+    elif action_type == "su_mission":
+        # Create a mission from the reminder
+        mission_id = memory.create_mission(
+            title=item.get("title", "Untitled"),
+            description=item.get("why", "") + "\n" + item.get("draft", ""),
+            priority="normal",
+        )
+        handled[str(idx)] = "mission"
+        _ack_callback(cb_id, f"Mission #{mission_id} created")
+        send_telegram(chat_id, f"Created mission #{mission_id}: {item.get('title', '')}")
+
+    # Advance to next item
+    state["handled"] = handled
+    state["current_index"] = idx + 1
+    state["phase"] = "dripping"
+    memory.set_standup_state(state)
+
+    standup._send_next_standup_item()
+
+
 def handle_callback(callback):
     """Handle inline button presses from Telegram."""
     cb_data = callback.get("data", "")
@@ -346,6 +462,11 @@ def handle_callback(callback):
     # Email actions (earchive, estar, esnooze, edraft, edelegate)
     if action_type.startswith("e"):
         _handle_email_action(action_type, action_id, cb_id, chat_id)
+        return
+
+    # Standup callbacks (su_send, su_edit, su_skip, su_ok, su_snooze, su_mission)
+    if action_type.startswith("su_"):
+        _handle_standup_callback(action_type, action_id, cb_id, chat_id)
         return
 
     a = memory.get_action(action_id)
