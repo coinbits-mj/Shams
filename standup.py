@@ -800,17 +800,30 @@ def deliver_morning_standup():
     if isinstance(results, str):
         results = json.loads(results)
 
-    # Phase 1: Overview
+    # Phase 1: Build action items, filtering auto-approved
+    action_items, auto_approved = _build_action_items_with_trust(results)
+
+    # Execute auto-approved items silently
+    if auto_approved:
+        _execute_auto_approved(auto_approved)
+
+    # Phase 2: Overview
     overview = _build_overview_message(results)
     if config.TELEGRAM_CHAT_ID:
+        if auto_approved:
+            auto_summary = _build_auto_approve_summary(auto_approved)
+            overview += f"\n✅ {len(auto_approved)} auto-approved ({auto_summary})"
         send_telegram(config.TELEGRAM_CHAT_ID, overview)
 
-    # Phase 2: Build action items list and start dripping
-    action_items = _build_action_items(results)
-
     if not action_items:
+        # Everything was auto-approved or nothing needed input
+        auto_summary = _build_auto_approve_summary(auto_approved)
         if config.TELEGRAM_CHAT_ID:
-            send_telegram(config.TELEGRAM_CHAT_ID, "Nothing needs your input today. Have a good one.")
+            if auto_approved:
+                send_telegram(config.TELEGRAM_CHAT_ID,
+                              f"✅ Standup done. Everything auto-approved today. {auto_summary}. Have a good one.")
+            else:
+                send_telegram(config.TELEGRAM_CHAT_ID, "Nothing needs your input today. Have a good one.")
         return
 
     # Save standup state and send first item
@@ -961,6 +974,65 @@ def _build_action_items(results: dict) -> list[dict]:
             })
 
     return items
+
+
+def _build_action_items_with_trust(results: dict) -> tuple[list[dict], list[dict]]:
+    """Build action items, separating auto-approved from manual.
+
+    Returns (manual_items, auto_approved_items).
+    """
+    all_items = _build_action_items(results)
+    manual = []
+    auto_approved = []
+
+    for item in all_items:
+        action_type = STANDUP_TRUST_MAP.get(item["type"])
+        if action_type and memory.should_auto_approve_action(action_type):
+            auto_approved.append(item)
+        else:
+            manual.append(item)
+
+    return manual, auto_approved
+
+
+def _execute_auto_approved(items: list[dict]):
+    """Execute auto-approved standup items silently."""
+    for item in items:
+        try:
+            if item["type"] == "reply":
+                # Save draft to Gmail
+                if item.get("message_id") and item.get("draft"):
+                    google_client.create_draft_reply(item["account"], item["message_id"], item["draft"])
+                    memory.log_activity("shams", "auto_approved", f"Draft auto-saved: {item.get('subject', '')}")
+            elif item["type"] == "prep":
+                memory.log_activity("shams", "auto_approved", f"Prep brief auto-approved: {item.get('event', '')}")
+            elif item["type"] == "reminder":
+                memory.log_activity("shams", "auto_approved", f"Reminder auto-acked: {item.get('title', '')}")
+            elif item["type"] == "scout_outreach":
+                memory.log_activity("shams", "auto_approved", f"Scout outreach auto-approved: {item.get('title', '')}")
+            elif item["type"] == "scout_info":
+                memory.log_activity("shams", "auto_approved", f"Scout finding auto-acked: {item.get('title', '')}")
+        except Exception as e:
+            logger.error(f"Auto-approve execution failed for {item.get('type')}: {e}")
+
+
+def _build_auto_approve_summary(items: list[dict]) -> str:
+    """Build a short summary of what was auto-approved."""
+    counts = {}
+    for item in items:
+        label = {
+            "reply": "email draft",
+            "prep": "prep brief",
+            "reminder": "reminder",
+            "scout_outreach": "scout outreach",
+            "scout_info": "scout finding",
+        }.get(item["type"], item["type"])
+        counts[label] = counts.get(label, 0) + 1
+
+    parts = []
+    for label, count in counts.items():
+        parts.append(f"{count} {label}{'s' if count != 1 else ''}")
+    return ", ".join(parts) if parts else "0 items"
 
 
 def _send_next_standup_item():

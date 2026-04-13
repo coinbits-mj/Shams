@@ -306,3 +306,41 @@ def test_should_auto_approve_action_default_false():
     import memory
     result = memory.should_auto_approve_action("nonexistent_action_type_xyz")
     assert result is False
+
+
+def test_auto_approved_items_filtered_from_drip_feed():
+    """Test that auto-approved items don't appear in the drip-feed."""
+    from unittest.mock import patch
+    import standup
+
+    results = {
+        "email": {
+            "reply": [
+                {"from": "ahmed@test.com", "subject": "Pricing", "draft": "Thanks", "triage_id": 1, "account": "qcc", "message_id": "abc"},
+            ],
+            "read": [], "archived": [], "archive_summary": "",
+        },
+        "mercury": {"balances": {}, "grand_total": 0, "alerts": []},
+        "rumi": {},
+        "calendar": {"events": [], "prep_briefs": []},
+        "reminders": [{"title": "Test reminder", "why": "testing", "suggestion": "", "draft": "", "mission_id": None, "loop_id": None, "action_id": None}],
+        "scout": {"findings": [], "searches_run": 0, "new_deals": 0, "updated_deals": 0},
+    }
+
+    # With no trust, both items should appear
+    with patch("standup.memory") as mock_mem:
+        mock_mem.should_auto_approve_action.return_value = False
+        items, auto = standup._build_action_items_with_trust(results)
+        assert len(items) == 2  # reply + reminder
+        assert len(auto) == 0
+
+    # With email_draft auto-approved, only reminder should appear
+    with patch("standup.memory") as mock_mem:
+        def side_effect(action_type):
+            return action_type == "email_draft"
+        mock_mem.should_auto_approve_action.side_effect = side_effect
+        items, auto = standup._build_action_items_with_trust(results)
+        assert len(items) == 1  # only reminder
+        assert items[0]["type"] == "reminder"
+        assert len(auto) == 1
+        assert auto[0]["type"] == "reply"
