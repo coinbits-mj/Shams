@@ -22,6 +22,34 @@ from telegram import send_telegram, send_telegram_with_buttons
 
 logger = logging.getLogger(__name__)
 
+# ── Trust tier configuration ───────────────────────────────────────────────
+
+TRUST_TIERS = {
+    # Low risk — 5 approvals, <20% rejection
+    "email_archive": {"tier": "low", "threshold": 5, "max_rejection_pct": 20},
+    "mission_create": {"tier": "low", "threshold": 5, "max_rejection_pct": 20},
+    "loop_close": {"tier": "low", "threshold": 5, "max_rejection_pct": 20},
+    "reminder_ack": {"tier": "low", "threshold": 5, "max_rejection_pct": 20},
+    # Medium risk — 15 approvals, <10% rejection
+    "email_draft": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
+    "deal_create": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
+    "deal_update": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
+    "prep_brief": {"tier": "medium", "threshold": 15, "max_rejection_pct": 10},
+    # High risk — 30 approvals, <5% rejection
+    "scout_outreach": {"tier": "high", "threshold": 30, "max_rejection_pct": 5},
+    "email_send": {"tier": "high", "threshold": 30, "max_rejection_pct": 5},
+    "action_execute": {"tier": "high", "threshold": 30, "max_rejection_pct": 5},
+}
+
+# Map standup item types to trust action types
+STANDUP_TRUST_MAP = {
+    "reply": "email_draft",
+    "prep": "prep_brief",
+    "reminder": "reminder_ack",
+    "scout_outreach": "scout_outreach",
+    "scout_info": "deal_create",
+}
+
 
 # ── Overnight Loop ─────────────────────────────────────────────────────────
 

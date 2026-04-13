@@ -289,3 +289,20 @@ def test_overview_message_includes_scout():
     msg = standup._build_overview_message(results)
     assert "2 new leads" in msg or "2 leads" in msg
     assert "1 deal updated" in msg or "1 updated" in msg
+
+
+def test_trust_tier_config():
+    """Test that TRUST_TIERS config exists and has expected structure."""
+    from standup import TRUST_TIERS
+    assert "email_draft" in TRUST_TIERS
+    assert "scout_outreach" in TRUST_TIERS
+    assert TRUST_TIERS["email_draft"]["threshold"] == 15
+    assert TRUST_TIERS["scout_outreach"]["threshold"] == 30
+    assert TRUST_TIERS["email_archive"]["threshold"] == 5
+
+
+def test_should_auto_approve_action_default_false():
+    """Test that unknown action types are not auto-approved."""
+    import memory
+    result = memory.should_auto_approve_action("nonexistent_action_type_xyz")
+    assert result is False

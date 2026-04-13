@@ -905,3 +905,91 @@ def set_standup_state(state: dict):
 def clear_standup_state():
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(f"DELETE FROM {P}memory WHERE key = 'standup_state'")
+
+
+# ── Trust Actions (per-action-type) ────────────────────────────────────────
+
+def get_trust_for_action(action_type: str) -> dict | None:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}trust_actions WHERE action_type = %s", (action_type,))
+        return cur.fetchone()
+
+
+def increment_trust_approval(action_type: str) -> bool:
+    """Increment approval count. Returns True if auto_approve was newly unlocked."""
+    from standup import TRUST_TIERS
+    tier_config = TRUST_TIERS.get(action_type, {"threshold": 15, "max_rejection_pct": 10})
+
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"INSERT INTO {P}trust_actions (action_type, total_approved) VALUES (%s, 1) "
+            f"ON CONFLICT (action_type) DO UPDATE SET total_approved = {P}trust_actions.total_approved + 1, "
+            f"updated_at = NOW() RETURNING *",
+            (action_type,),
+        )
+        row = cur.fetchone()
+
+    if not row or row["auto_approve"]:
+        return False
+
+    total = row["total_approved"] + row["total_rejected"]
+    rejection_pct = (row["total_rejected"] / total * 100) if total > 0 else 0
+
+    if row["total_approved"] >= tier_config["threshold"] and rejection_pct < tier_config["max_rejection_pct"]:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {P}trust_actions SET auto_approve = TRUE, updated_at = NOW() "
+                f"WHERE action_type = %s AND auto_approve = FALSE",
+                (action_type,),
+            )
+        log_activity("shams", "trust_unlocked", f"Auto-approve unlocked for {action_type}")
+        return True
+
+    return False
+
+
+def increment_trust_rejection(action_type: str):
+    """Increment rejection count. Revokes auto-approve if 2+ rejections in 7 days."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}trust_actions (action_type, total_rejected) VALUES (%s, 1) "
+            f"ON CONFLICT (action_type) DO UPDATE SET total_rejected = {P}trust_actions.total_rejected + 1, "
+            f"updated_at = NOW()",
+            (action_type,),
+        )
+
+    # Check 7-day rejection window from activity feed
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"SELECT COUNT(*) FROM {P}activity_feed WHERE event_type = 'trust_rejection' "
+            f"AND content LIKE %s AND timestamp > NOW() - INTERVAL '7 days'",
+            (f"%{action_type}%",),
+        )
+        recent_rejections = cur.fetchone()[0] + 1  # +1 for this rejection
+
+    log_activity("shams", "trust_rejection", f"Rejection recorded for {action_type}")
+
+    if recent_rejections >= 2:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {P}trust_actions SET auto_approve = FALSE, updated_at = NOW() "
+                f"WHERE action_type = %s AND auto_approve = TRUE",
+                (action_type,),
+            )
+            if cur.rowcount > 0:
+                log_activity("shams", "trust_revoked", f"Auto-approve revoked for {action_type} (2+ rejections in 7 days)")
+
+
+def should_auto_approve_action(action_type: str) -> bool:
+    """Check if an action type is auto-approved."""
+    row = get_trust_for_action(action_type)
+    if not row:
+        return False
+    return row["auto_approve"]
+
+
+def get_trust_summary() -> list[dict]:
+    """Get all trust records for dashboard/settings."""
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}trust_actions ORDER BY action_type")
+        return cur.fetchall()

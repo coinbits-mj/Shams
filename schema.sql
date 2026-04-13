@@ -335,3 +335,13 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 CREATE INDEX IF NOT EXISTS idx_email_triage_tier ON shams_email_triage (tier);
+
+CREATE TABLE IF NOT EXISTS shams_trust_actions (
+    id              SERIAL PRIMARY KEY,
+    action_type     VARCHAR(50) NOT NULL UNIQUE,
+    total_approved  INTEGER DEFAULT 0,
+    total_rejected  INTEGER DEFAULT 0,
+    auto_approve    BOOLEAN DEFAULT FALSE,
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_trust_actions_type ON shams_trust_actions (action_type);
