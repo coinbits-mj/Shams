@@ -198,3 +198,36 @@ def route_extracted(
 
     # Priority categories, noise, personal, _error — no routing.
     return
+
+
+# ── Gmail-side archiver with safety net ──────────────────────────────────────
+
+def _dry_run_enabled() -> bool:
+    return os.environ.get("EMAIL_MINING_DRY_RUN", "").lower() in ("1", "true", "yes")
+
+
+def archive_in_gmail(account_key: str, gmail_message_id: str, category: str) -> bool:
+    """Archive an email in Gmail (remove INBOX + UNREAD labels), subject to safety rules.
+
+    Returns True if Gmail was actually mutated, False if skipped.
+    Hard guards:
+      - Never archives priority categories.
+      - Never archives 'personal' (stays in inbox for human review).
+      - Never archives '_error' rows.
+      - No-op under EMAIL_MINING_DRY_RUN.
+    """
+    if category in NEVER_ARCHIVE:
+        return False
+    if category == "_error":
+        return False
+    if category not in ALL_CATEGORIES:
+        logger.warning(f"archive_in_gmail: unknown category '{category}', refusing to archive")
+        return False
+    if _dry_run_enabled():
+        logger.info(f"[DRY RUN] would archive {account_key}:{gmail_message_id} ({category})")
+        return False
+
+    import google_client
+    ok_archive = google_client.archive_email(account_key, gmail_message_id)
+    ok_read = google_client.mark_read(account_key, gmail_message_id)
+    return ok_archive and ok_read

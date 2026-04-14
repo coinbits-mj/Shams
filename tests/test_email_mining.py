@@ -230,3 +230,56 @@ class TestRouter:
         import email_mining
         # Should not raise, no side effects.
         email_mining.route_extracted(archive_id=None, category="newsletter", entities={})
+
+
+class TestArchiver:
+    def test_archive_skips_priority_categories(self, monkeypatch):
+        import email_mining
+
+        called = {"archive": False, "mark_read": False}
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: called.update({"archive": True}) or True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: called.update({"mark_read": True}) or True)
+
+        for cat in email_mining.PRIORITY_CATEGORIES:
+            called["archive"] = False
+            called["mark_read"] = False
+            result = email_mining.archive_in_gmail("personal", "msg1", category=cat)
+            assert result is False, f"priority category {cat} should NOT archive"
+            assert called["archive"] is False
+            assert called["mark_read"] is False
+
+    def test_archive_skips_personal(self, monkeypatch):
+        import email_mining
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: True)
+        assert email_mining.archive_in_gmail("personal", "msg1", category="personal") is False
+
+    def test_archive_skips_error(self, monkeypatch):
+        import email_mining
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: True)
+        assert email_mining.archive_in_gmail("personal", "msg1", category="_error") is False
+
+    def test_archive_noise_calls_gmail(self, monkeypatch):
+        import email_mining
+
+        calls = []
+        monkeypatch.setattr("google_client.archive_email", lambda acct, mid: calls.append(("archive", acct, mid)) or True)
+        monkeypatch.setattr("google_client.mark_read", lambda acct, mid: calls.append(("mark_read", acct, mid)) or True)
+
+        result = email_mining.archive_in_gmail("coinbits", "msgXYZ", category="newsletter")
+        assert result is True
+        assert ("archive", "coinbits", "msgXYZ") in calls
+        assert ("mark_read", "coinbits", "msgXYZ") in calls
+
+    def test_archive_respects_dry_run(self, monkeypatch):
+        import email_mining
+
+        monkeypatch.setenv("EMAIL_MINING_DRY_RUN", "true")
+        calls = []
+        monkeypatch.setattr("google_client.archive_email", lambda *a: calls.append("archive") or True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a: calls.append("mark_read") or True)
+
+        result = email_mining.archive_in_gmail("coinbits", "msgXYZ", category="newsletter")
+        assert result is False, "dry-run should not touch Gmail"
+        assert calls == []
