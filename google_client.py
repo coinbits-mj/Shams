@@ -376,6 +376,16 @@ def fetch_full_message(account_key: str, message_id: str) -> dict | None:
         from_name = from_hdr.split("<")[0].strip().strip('"')
         from_addr = from_hdr.split("<")[1].split(">")[0].strip()
 
+    # Parse RFC 2822 Date header to ISO 8601 so Postgres TIMESTAMPTZ accepts it.
+    from email.utils import parsedate_to_datetime
+    date_iso = None
+    raw_date = hdrs.get("Date", "")
+    if raw_date:
+        try:
+            date_iso = parsedate_to_datetime(raw_date).isoformat()
+        except Exception:
+            date_iso = None
+
     return {
         "account": account_key,
         "account_email": email_addr,
@@ -385,7 +395,7 @@ def fetch_full_message(account_key: str, message_id: str) -> dict | None:
         "from_name": from_name,
         "to_addrs": [a.strip() for a in hdrs.get("To", "").split(",") if a.strip()],
         "subject": hdrs.get("Subject", ""),
-        "date": hdrs.get("Date", ""),
+        "date": date_iso,
         "snippet": data.get("snippet", ""),
         "body": body,
     }
