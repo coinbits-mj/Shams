@@ -349,3 +349,77 @@ class TestEscalator:
                                     from_name="V", from_addr="v@v.com",
                                     subject="inv", snippet="...")
         assert sent == []
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestProcessEmail:
+    def test_process_invoice_end_to_end(self, monkeypatch):
+        """Invoice flows through classifier -> archive row -> AP queue -> Gmail archive."""
+        import email_mining, db
+
+        monkeypatch.setattr(email_mining, "_call_sonnet",
+            lambda *a, **kw: '{"category":"invoice","priority":"P2","entities":{"vendor":"Sysco","amount_cents":124000,"currency":"USD","invoice_number":"INV-E2E-001","due_date":"2026-05-01"}}')
+        gmail_calls = []
+        monkeypatch.setattr("google_client.archive_email",
+            lambda acct, mid: gmail_calls.append(("archive", acct, mid)) or True)
+        monkeypatch.setattr("google_client.mark_read",
+            lambda acct, mid: gmail_calls.append(("mark_read", acct, mid)) or True)
+
+        email = {
+            "account": "qcc",
+            "gmail_message_id": "msg_e2e_inv_001",
+            "gmail_thread_id": "thread_e2e_inv_001",
+            "from_addr": "billing@sysco.com",
+            "from_name": "Sysco Billing",
+            "to_addrs": ["maher@qcitycoffee.com"],
+            "subject": "Invoice INV-E2E-001",
+            "date": "2026-04-13T00:00:00Z",
+            "snippet": "Your invoice is attached",
+            "body": "Please find attached invoice INV-E2E-001 for $1,240.00 due 2026-05-01",
+        }
+        result = email_mining.process_email(email)
+        assert result["archive_id"] is not None
+        assert result["category"] == "invoice"
+        assert result["gmail_archived"] is True
+
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT invoice_number FROM shams_ap_queue WHERE archive_id = %s",
+                            (result["archive_id"],))
+                assert cur.fetchone() == ("INV-E2E-001",)
+                cur.execute("SELECT gmail_archived FROM shams_email_archive WHERE id = %s",
+                            (result["archive_id"],))
+                assert cur.fetchone() == (True,)
+        assert ("archive", "qcc", "msg_e2e_inv_001") in gmail_calls
+
+    def test_process_priority_does_not_archive_and_fires_telegram(self, monkeypatch):
+        """Priority email stays in inbox, fires Telegram on first thread occurrence."""
+        import email_mining, uuid
+
+        monkeypatch.setattr(email_mining, "_call_sonnet",
+            lambda *a, **kw: '{"category":"coinbits_legal","priority":"P1","entities":{"tldr":"review settlement draft"}}')
+        gmail_calls = []
+        monkeypatch.setattr("google_client.archive_email",
+            lambda *a: gmail_calls.append("archive") or True)
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda t, **kw: sent.append(t) or True)
+
+        uniq = uuid.uuid4().hex[:12]
+        email = {
+            "account": "coinbits",
+            "gmail_message_id": f"msg_e2e_legal_{uniq}",
+            "gmail_thread_id": f"thread_e2e_legal_{uniq}",
+            "from_addr": "sgoldstein@cooley.com",
+            "from_name": "Sarah Goldstein",
+            "to_addrs": ["maher@coinbits.app"],
+            "subject": "Re: distribution",
+            "date": "2026-04-13T00:00:00Z",
+            "snippet": "Please review the attached draft",
+            "body": "Per our discussion...",
+        }
+        result = email_mining.process_email(email)
+        assert result["category"] == "coinbits_legal"
+        assert result["gmail_archived"] is False
+        assert result["escalated"] is True
+        assert gmail_calls == []
+        assert len(sent) == 1

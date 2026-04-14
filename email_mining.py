@@ -291,3 +291,76 @@ def maybe_escalate(
 
     memory.record_thread_escalation(gmail_thread_id, category, archive_id)
     return True
+
+
+# -- Orchestrator -------------------------------------------------------------
+
+def process_email(email: dict) -> dict:
+    """Run the full classify -> extract -> route -> archive pipeline on one email.
+
+    `email` must contain at least: account, gmail_message_id, gmail_thread_id.
+    Other fields (from_addr, subject, body, etc.) should be present for good classification.
+
+    Returns: {archive_id, category, priority, gmail_archived, escalated}
+    """
+    import memory
+
+    # 1. Classify + extract.
+    classification = classify_and_extract(email)
+    category = classification["category"]
+    priority = classification["priority"]
+    entities = classification["entities"]
+
+    # 2. Write archive row (idempotent).
+    archive_id = memory.insert_email_archive({
+        **email,
+        "category": category,
+        "priority": priority,
+        "entities": entities,
+        "processed_model": DEFAULT_MODEL,
+    })
+
+    # 3. Route extracted data to destination tables.
+    route_extracted(
+        archive_id=archive_id,
+        category=category,
+        entities=entities,
+        source_subject=email.get("subject", ""),
+    )
+
+    # 4. Archive in Gmail (with safety net).
+    gmail_archived = archive_in_gmail(
+        account_key=email["account"],
+        gmail_message_id=email["gmail_message_id"],
+        category=category,
+    )
+    if gmail_archived and archive_id is not None:
+        # Persist the archived flag.
+        import db
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE shams_email_archive SET gmail_archived = TRUE WHERE id = %s",
+                    (archive_id,),
+                )
+
+    # 5. Escalate via Telegram if priority + new thread.
+    escalated = False
+    if archive_id is not None and category in PRIORITY_CATEGORIES:
+        escalated = maybe_escalate(
+            archive_id=archive_id,
+            category=category,
+            gmail_thread_id=email.get("gmail_thread_id", ""),
+            from_name=email.get("from_name", ""),
+            from_addr=email.get("from_addr", ""),
+            subject=email.get("subject", ""),
+            snippet=email.get("snippet", ""),
+        )
+
+    return {
+        "archive_id": archive_id,
+        "category": category,
+        "priority": priority,
+        "gmail_archived": gmail_archived,
+        "escalated": escalated,
+    }
