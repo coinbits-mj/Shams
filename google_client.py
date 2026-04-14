@@ -335,3 +335,57 @@ def get_upcoming_events(days: int = 7) -> list[dict]:
     except Exception as e:
         logger.error(f"Calendar error: {e}")
         return []
+
+
+def fetch_full_message(account_key: str, message_id: str) -> dict | None:
+    """Fetch full headers + plain-text body for a message. Returns a dict suitable
+    for email_mining.process_email(), or None on failure.
+    """
+    import base64
+    token = _get_access_token(account_key)
+    if not token:
+        return None
+    email_addr = GOOGLE_ACCOUNTS.get(account_key, account_key)
+    r = requests.get(
+        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+        headers=_gmail_headers(token),
+        params={"format": "full"},
+        timeout=20,
+    )
+    if not r.ok:
+        logger.error(f"fetch_full_message error {r.status_code} for {account_key}:{message_id}")
+        return None
+    data = r.json()
+    payload = data.get("payload", {})
+    hdrs = {h["name"]: h["value"] for h in payload.get("headers", [])}
+
+    def _extract_text(part):
+        if part.get("mimeType") == "text/plain" and part.get("body", {}).get("data"):
+            return base64.urlsafe_b64decode(part["body"]["data"]).decode("utf-8", errors="replace")
+        for sub in part.get("parts", []):
+            text = _extract_text(sub)
+            if text:
+                return text
+        return ""
+
+    body = _extract_text(payload)[:50000]
+
+    from_hdr = hdrs.get("From", "")
+    from_name, from_addr = from_hdr, from_hdr
+    if "<" in from_hdr and ">" in from_hdr:
+        from_name = from_hdr.split("<")[0].strip().strip('"')
+        from_addr = from_hdr.split("<")[1].split(">")[0].strip()
+
+    return {
+        "account": account_key,
+        "account_email": email_addr,
+        "gmail_message_id": message_id,
+        "gmail_thread_id": data.get("threadId", ""),
+        "from_addr": from_addr,
+        "from_name": from_name,
+        "to_addrs": [a.strip() for a in hdrs.get("To", "").split(",") if a.strip()],
+        "subject": hdrs.get("Subject", ""),
+        "date": hdrs.get("Date", ""),
+        "snippet": data.get("snippet", ""),
+        "body": body,
+    }
