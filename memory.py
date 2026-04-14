@@ -1260,3 +1260,126 @@ def ack_bridge_command(command_id: int, status: str = "sent"):
             f"UPDATE {P}bridge_commands SET status = %s, executed_at = NOW() WHERE id = %s",
             (status, command_id),
         )
+
+
+# ── Email mining helpers ─────────────────────────────────────────────────────
+
+def insert_email_archive(email: dict) -> int | None:
+    """Insert a row into shams_email_archive, idempotent on gmail_message_id.
+
+    Returns the archive row id (new or existing). Returns None on DB error.
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shams_email_archive
+                (account, gmail_message_id, gmail_thread_id, from_addr, from_name,
+                 to_addrs, subject, date, snippet, body, category, priority,
+                 entities, gmail_archived, processed_model)
+            VALUES
+                (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (gmail_message_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                email.get("account"),
+                email["gmail_message_id"],
+                email.get("gmail_thread_id", ""),
+                email.get("from_addr"),
+                email.get("from_name"),
+                email.get("to_addrs") or [],
+                email.get("subject"),
+                email.get("date"),
+                email.get("snippet"),
+                email.get("body"),
+                email["category"],
+                email["priority"],
+                json.dumps(email.get("entities") or {}),
+                email.get("gmail_archived", False),
+                email.get("processed_model"),
+            ),
+        )
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        # Conflict path — fetch existing id.
+        cur.execute(
+            "SELECT id FROM shams_email_archive WHERE gmail_message_id = %s",
+            (email["gmail_message_id"],),
+        )
+        existing = cur.fetchone()
+        return existing[0] if existing else None
+
+
+def insert_ap_invoice(invoice: dict) -> int | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shams_ap_queue
+                (archive_id, vendor, amount_cents, currency, invoice_number, due_date, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                invoice["archive_id"],
+                invoice.get("vendor"),
+                invoice.get("amount_cents"),
+                invoice.get("currency", "USD"),
+                invoice.get("invoice_number"),
+                invoice.get("due_date"),
+                invoice.get("notes"),
+            ),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def insert_cx_complaint(complaint: dict) -> int | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shams_cx_log
+                (archive_id, customer_email, customer_name, issue_summary, severity)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                complaint["archive_id"],
+                complaint.get("customer_email"),
+                complaint.get("customer_name"),
+                complaint.get("issue_summary"),
+                complaint.get("severity"),
+            ),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def thread_already_escalated(gmail_thread_id: str) -> bool:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM shams_priority_threads WHERE gmail_thread_id = %s",
+            (gmail_thread_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def record_thread_escalation(gmail_thread_id: str, category: str, last_email_id: int) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shams_priority_threads (gmail_thread_id, category, last_email_id)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (gmail_thread_id) DO UPDATE
+                SET last_email_id = EXCLUDED.last_email_id
+            """,
+            (gmail_thread_id, category, last_email_id),
+        )
+
+
+def get_backfill_cursor(account_key: str) -> str | None:
+    return recall(f"email_mining_backfill_cursor_{account_key}")
+
+
+def set_backfill_cursor(account_key: str, page_token: str) -> None:
+    remember(f"email_mining_backfill_cursor_{account_key}", page_token)
