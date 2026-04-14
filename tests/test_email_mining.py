@@ -154,3 +154,79 @@ class TestClassifier:
             "from_addr": "x@y.com", "subject": "hi", "snippet": "hi", "body": "hi"
         })
         assert result["category"] == "_error"
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestRouter:
+    def test_route_invoice_creates_ap_queue_row(self):
+        import email_mining, memory, db
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_route_inv_001",
+            "gmail_thread_id": "t_inv",
+            "subject": "Invoice",
+            "category": "invoice",
+            "priority": "P2",
+            "entities": {},
+        })
+        email_mining.route_extracted(
+            archive_id=archive_id,
+            category="invoice",
+            entities={"vendor": "Odeko", "amount_cents": 85000, "currency": "USD",
+                      "invoice_number": "ODK-42", "due_date": "2026-05-01"},
+        )
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT vendor, amount_cents, invoice_number FROM shams_ap_queue WHERE archive_id = %s", (archive_id,))
+                row = cur.fetchone()
+        assert row == ("Odeko", 85000, "ODK-42")
+
+    def test_route_customer_complaint_creates_cx_row(self):
+        import email_mining, memory, db
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_route_cx_001",
+            "gmail_thread_id": "t_cx",
+            "subject": "stale",
+            "category": "customer_complaint",
+            "priority": "P2",
+            "entities": {},
+        })
+        email_mining.route_extracted(
+            archive_id=archive_id,
+            category="customer_complaint",
+            entities={"customer_email": "c@c.com", "customer_name": "C",
+                      "issue_summary": "stale beans", "severity": "high"},
+        )
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT customer_email, severity FROM shams_cx_log WHERE archive_id = %s", (archive_id,))
+                row = cur.fetchone()
+        assert row == ("c@c.com", "high")
+
+    def test_route_deal_pitch_calls_create_deal(self, monkeypatch):
+        import email_mining
+
+        captured = {}
+        def fake_create_deal(**kwargs):
+            captured.update(kwargs)
+            return 42
+        monkeypatch.setattr("memory.create_deal", fake_create_deal)
+
+        email_mining.route_extracted(
+            archive_id=1,
+            category="deal_pitch",
+            entities={"title": "Red House Roasters buyout",
+                      "deal_type": "acquisition",
+                      "contact": "broker@x.com"},
+            source_subject="Possible sale",
+        )
+        assert captured["title"] == "Red House Roasters buyout"
+        assert captured["deal_type"] == "acquisition"
+
+    def test_route_noise_does_nothing(self):
+        import email_mining
+        # Should not raise, no side effects.
+        email_mining.route_extracted(archive_id=None, category="newsletter", entities={})

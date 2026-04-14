@@ -140,3 +140,61 @@ def classify_and_extract(email: dict) -> dict:
     entities = parsed.get("entities", {}) or {}
 
     return {"category": category, "priority": priority, "entities": entities}
+
+
+# ── Router ───────────────────────────────────────────────────────────────────
+
+def route_extracted(
+    archive_id: int | None,
+    category: str,
+    entities: dict,
+    source_subject: str = "",
+) -> None:
+    """Route extracted data to the right downstream table based on category.
+
+    No-op for categories that don't route (priority categories, noise, errors).
+    """
+    import memory
+
+    if archive_id is None:
+        return
+
+    if category == "invoice":
+        memory.insert_ap_invoice({
+            "archive_id": archive_id,
+            "vendor": entities.get("vendor"),
+            "amount_cents": entities.get("amount_cents"),
+            "currency": entities.get("currency", "USD"),
+            "invoice_number": entities.get("invoice_number"),
+            "due_date": entities.get("due_date"),
+            "notes": None,
+        })
+        return
+
+    if category == "customer_complaint":
+        memory.insert_cx_complaint({
+            "archive_id": archive_id,
+            "customer_email": entities.get("customer_email"),
+            "customer_name": entities.get("customer_name"),
+            "issue_summary": entities.get("issue_summary"),
+            "severity": entities.get("severity"),
+        })
+        return
+
+    if category == "deal_pitch":
+        title = entities.get("title") or source_subject or "Untitled deal"
+        memory.create_deal(
+            title=title,
+            deal_type=entities.get("deal_type", "other"),
+            value=float(entities.get("value", 0) or 0),
+            contact=entities.get("contact", ""),
+            source="email_mining",
+            location=entities.get("location", ""),
+            next_action=entities.get("next_action", ""),
+            score=int(entities.get("score", 0) or 0),
+            notes=entities.get("notes", ""),
+        )
+        return
+
+    # Priority categories, noise, personal, _error — no routing.
+    return
