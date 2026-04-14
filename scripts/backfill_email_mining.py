@@ -80,13 +80,36 @@ def process_chunk(account_key: str, message_ids: list[str]) -> dict:
     return {"processed": processed, "errors": errors, "categories": category_counts}
 
 
+def _with_retry(fn, *args, attempts: int = 6, base_delay: float = 2.0, **kwargs):
+    """Retry a callable with exponential backoff on transient errors (DNS, connection, etc)."""
+    import time
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last_exc = e
+            delay = base_delay * (2 ** i)
+            logger.warning(f"transient error (attempt {i+1}/{attempts}): {type(e).__name__}: {e}. sleeping {delay}s")
+            time.sleep(delay)
+    raise last_exc
+
+
 def backfill_account(account_key: str, limit: int | None) -> None:
     import memory
+    import time as _time
 
     total = 0
     while True:
-        cursor = memory.get_backfill_cursor(account_key)
-        ids, next_token = list_message_ids(account_key, cursor)
+        try:
+            cursor = _with_retry(memory.get_backfill_cursor, account_key)
+            ids, next_token = _with_retry(list_message_ids, account_key, cursor)
+        except Exception as e:
+            logger.error(f"{account_key}: persistent error getting cursor/ids after retries: {e}")
+            logger.error(f"{account_key}: sleeping 60s then trying again")
+            _time.sleep(60)
+            continue
+
         if not ids:
             logger.info(f"{account_key}: no more messages (cursor exhausted)")
             break
@@ -100,10 +123,16 @@ def backfill_account(account_key: str, limit: int | None) -> None:
 
         if next_token is None:
             logger.info(f"{account_key}: reached end of mailbox")
-            memory.set_backfill_cursor(account_key, "")  # sentinel for "done"
+            try:
+                _with_retry(memory.set_backfill_cursor, account_key, "")
+            except Exception:
+                pass
             break
 
-        memory.set_backfill_cursor(account_key, next_token)
+        try:
+            _with_retry(memory.set_backfill_cursor, account_key, next_token)
+        except Exception as e:
+            logger.error(f"{account_key}: failed to persist cursor after retries: {e}. continuing anyway")
 
         if limit and total >= limit:
             logger.info(f"{account_key}: hit --limit {limit}, stopping")
