@@ -101,3 +101,56 @@ class TestMemoryHelpers:
         assert memory.get_backfill_cursor("personal") == "page_token_abc"
         memory.set_backfill_cursor("personal", "page_token_def")
         assert memory.get_backfill_cursor("personal") == "page_token_def"
+
+
+class TestClassifier:
+    """Tests classifier output shape and category coverage.
+
+    Uses mocked anthropic client; no real API calls.
+    """
+
+    def test_classify_returns_expected_shape(self, monkeypatch):
+        import email_mining
+
+        # Mock the anthropic call to return a known classification.
+        def fake_call(messages, system):
+            return '{"category":"invoice","priority":"P2","entities":{"vendor":"Sysco","amount_cents":124000,"currency":"USD","invoice_number":"INV-001","due_date":"2026-04-25"}}'
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+
+        result = email_mining.classify_and_extract({
+            "from_addr": "billing@sysco.com",
+            "subject": "Invoice INV-001",
+            "snippet": "Your invoice for $1,240.00 is attached.",
+            "body": "Dear customer, please find attached invoice INV-001 for $1,240.00 due 2026-04-25.",
+        })
+
+        assert result["category"] == "invoice"
+        assert result["priority"] == "P2"
+        assert result["entities"]["vendor"] == "Sysco"
+        assert result["entities"]["amount_cents"] == 124000
+
+    def test_classify_unknown_category_falls_back_to_other(self, monkeypatch):
+        import email_mining
+
+        def fake_call(messages, system):
+            return '{"category":"not_a_real_category","priority":"P3","entities":{}}'
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+        result = email_mining.classify_and_extract({
+            "from_addr": "x@y.com", "subject": "hi", "snippet": "hi", "body": "hi"
+        })
+        assert result["category"] == "other"
+        assert result["priority"] == "P3"
+
+    def test_classify_malformed_json_returns_error_category(self, monkeypatch):
+        import email_mining
+
+        def fake_call(messages, system):
+            return "this is not json at all"
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+        result = email_mining.classify_and_extract({
+            "from_addr": "x@y.com", "subject": "hi", "snippet": "hi", "body": "hi"
+        })
+        assert result["category"] == "_error"
