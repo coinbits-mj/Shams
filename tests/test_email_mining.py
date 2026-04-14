@@ -283,3 +283,69 @@ class TestArchiver:
         result = email_mining.archive_in_gmail("coinbits", "msgXYZ", category="newsletter")
         assert result is False, "dry-run should not touch Gmail"
         assert calls == []
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestEscalator:
+    def test_new_thread_fires_telegram(self, monkeypatch):
+        import email_mining, memory
+
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        archive_id = memory.insert_email_archive({
+            "account": "coinbits",
+            "gmail_message_id": "msg_esc_new_001",
+            "gmail_thread_id": "thread_esc_new_001",
+            "from_addr": "counsel@cooley.com",
+            "from_name": "Sarah Goldstein",
+            "subject": "Re: Final distribution",
+            "snippet": "Per our call yesterday...",
+            "category": "coinbits_legal",
+            "priority": "P1",
+            "entities": {},
+        })
+        email_mining.maybe_escalate(archive_id=archive_id,
+                                    category="coinbits_legal",
+                                    gmail_thread_id="thread_esc_new_001",
+                                    from_name="Sarah Goldstein",
+                                    from_addr="counsel@cooley.com",
+                                    subject="Re: Final distribution",
+                                    snippet="Per our call yesterday...")
+        assert len(sent) == 1
+        assert "coinbits_legal" in sent[0].lower() or "coinbits" in sent[0].lower()
+        assert "Sarah" in sent[0]
+
+    def test_reply_on_existing_thread_does_not_fire(self, monkeypatch):
+        import email_mining, memory
+
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        archive_id = memory.insert_email_archive({
+            "account": "coinbits",
+            "gmail_message_id": "msg_esc_existing_001",
+            "gmail_thread_id": "thread_esc_existing_001",
+            "category": "coinbits_legal",
+            "priority": "P1",
+            "entities": {},
+        })
+        memory.record_thread_escalation("thread_esc_existing_001", "coinbits_legal", archive_id)
+
+        email_mining.maybe_escalate(archive_id=archive_id,
+                                    category="coinbits_legal",
+                                    gmail_thread_id="thread_esc_existing_001",
+                                    from_name="X", from_addr="x@y.com",
+                                    subject="Re:", snippet="...")
+        assert sent == []
+
+    def test_non_priority_does_not_fire(self, monkeypatch):
+        import email_mining
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        email_mining.maybe_escalate(archive_id=999, category="invoice",
+                                    gmail_thread_id="whatever",
+                                    from_name="V", from_addr="v@v.com",
+                                    subject="inv", snippet="...")
+        assert sent == []

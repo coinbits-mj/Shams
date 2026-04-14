@@ -55,6 +55,30 @@ def send_telegram(chat_id: str, text: str):
             logger.error(f"Telegram send failed: {e}")
 
 
+def send_message(text: str, **kwargs) -> bool:
+    """Send a Telegram message to MJ's chat. Accepts optional parse_mode etc.
+
+    Thin wrapper used by email mining escalator and similar callers.
+    Returns True on send attempt (Telegram disabled is treated as a no-op success).
+    """
+    chat_id = config.TELEGRAM_CHAT_ID
+    if not TG_BASE or not chat_id:
+        logger.warning(f"Telegram disabled — would send: {text[:80]}...")
+        return True
+    payload = {"chat_id": chat_id, "text": text}
+    for k, v in kwargs.items():
+        payload[k] = v
+    try:
+        r = requests.post(f"{TG_BASE}/sendMessage", json=payload, timeout=30)
+        if not r.ok:
+            logger.error(f"Telegram send failed: {r.status_code} {r.text[:200]}")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Telegram send failed: {e}")
+        return False
+
+
 def download_telegram_file(file_id: str) -> bytes:
     """Download a file from Telegram by file_id. Returns raw bytes."""
     r = requests.get(f"{TG_BASE}/getFile", params={"file_id": file_id}, timeout=15)

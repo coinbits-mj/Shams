@@ -231,3 +231,63 @@ def archive_in_gmail(account_key: str, gmail_message_id: str, category: str) -> 
     ok_archive = google_client.archive_email(account_key, gmail_message_id)
     ok_read = google_client.mark_read(account_key, gmail_message_id)
     return ok_archive and ok_read
+
+
+# ── Telegram escalator ───────────────────────────────────────────────────────
+
+_CATEGORY_EMOJI = {
+    "coinbits_legal": "⚖️",
+    "prime_trust_lawsuit": "🏛️",
+    "investor_relations": "💼",
+    "somerville_purchase": "🏠",
+}
+
+_CATEGORY_LABEL = {
+    "coinbits_legal": "Coinbits Legal",
+    "prime_trust_lawsuit": "Prime Trust Lawsuit",
+    "investor_relations": "Investor Relations",
+    "somerville_purchase": "Somerville Purchase",
+}
+
+
+def maybe_escalate(
+    archive_id: int,
+    category: str,
+    gmail_thread_id: str,
+    from_name: str,
+    from_addr: str,
+    subject: str,
+    snippet: str,
+) -> bool:
+    """Fire a Telegram ping if this is a new priority thread.
+
+    Returns True if a ping was sent.
+    """
+    import memory
+    import telegram
+
+    if category not in PRIORITY_CATEGORIES:
+        return False
+    if memory.thread_already_escalated(gmail_thread_id):
+        return False
+
+    emoji = _CATEGORY_EMOJI.get(category, "🚨")
+    label = _CATEGORY_LABEL.get(category, category)
+    display_from = f"{from_name} <{from_addr}>" if from_name else from_addr
+
+    text = (
+        f"🚨 {emoji} *{label}* — new thread\n"
+        f"From: {display_from}\n"
+        f"Subject: {subject}\n"
+        f"{(snippet or '')[:200]}\n"
+        f"→ https://app.myshams.ai/inbox/{archive_id}"
+    )
+
+    try:
+        telegram.send_message(text, parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Telegram escalation failed: {e}")
+        return False
+
+    memory.record_thread_escalation(gmail_thread_id, category, archive_id)
+    return True
