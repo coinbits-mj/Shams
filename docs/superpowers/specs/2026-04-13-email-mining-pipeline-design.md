@@ -26,6 +26,17 @@ Mine the entire Gmail backlog + every new email going forward, extract structure
 - Replacing Gmail as the user's primary email client. Shams mines, Shams surfaces, but the user still reads/replies in Gmail.
 - Deleting any email. All actions are non-destructive (archive only — emails remain retrievable in Gmail's "All Mail").
 
+## Collision Check — Rumi Gmail Parser
+
+Rumi (`/Users/mj/code/coffee-pl-bot`) has its own Gmail invoice parser (`data/gmail_client.py`) that polls every 30 minutes. Verified no collision:
+
+- Rumi reads from **different accounts** (`clifton.manager@`, `manager@`, `wholesale@qcitycoffee.com`). Shams mines `maher.janajri@`, `maher@coinbits.app`, `maher@qcitycoffee.com`. Zero overlap.
+- Rumi uses **separate OAuth credentials** (`credentials.json` + per-account token files, `gmail.readonly` scope). Shams uses DB-stored tokens, `gmail.modify` scope. They can't touch each other's accounts.
+- Rumi's query uses `newer_than:90d` with **no `in:inbox` clause** — archived emails are still discoverable. Even in a hypothetical shared account, Shams archiving wouldn't hide emails from Rumi.
+- Rumi is **read-only** and dedupes via its own DB, not Gmail state.
+
+No exception needed in Shams's pipeline.
+
 ## Architecture
 
 Two execution paths share a single pipeline:
