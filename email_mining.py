@@ -41,44 +41,77 @@ NOISE_CATEGORIES = {
 
 ALL_CATEGORIES = PRIORITY_CATEGORIES | ACTIONABLE_CATEGORIES | NOISE_CATEGORIES
 
-# Categories that should NEVER have Gmail INBOX label removed automatically.
-# Priority categories always stay in inbox. 'personal' stays in inbox (human domain).
-NEVER_ARCHIVE = PRIORITY_CATEGORIES | {"personal"}
+# Categories that should NEVER have Gmail INBOX label removed automatically
+# purely based on category (priority-based never-archive is handled separately
+# in archive_in_gmail by checking priority == 'P1'). 'personal' stays in inbox.
+NEVER_ARCHIVE_CATEGORIES = {"personal"}
+# Legacy alias — kept for tests that reference NEVER_ARCHIVE.
+NEVER_ARCHIVE = NEVER_ARCHIVE_CATEGORIES | PRIORITY_CATEGORIES
 
 DEFAULT_MODEL = os.environ.get("EMAIL_MINING_MODEL", "claude-sonnet-4-6")
 
 # ── Classifier ───────────────────────────────────────────────────────────────
 
-_SYSTEM_PROMPT = """You are Shams's email triage classifier. You read one email at a time and output a single JSON object classifying it.
+_SYSTEM_PROMPT = """You are Shams's email triage classifier for MJ (Maher Janajri), founder of Queen City Coffee Roasters (QCC) and Coinbits. You read one email at a time and output a single JSON object with category, priority, and extracted entities.
 
-CATEGORIES (choose exactly one):
+# PRIORITY — assign independently of category
 
-Priority (P1 — always escalate, never auto-archive):
-- coinbits_legal: Counsel emails for Coinbits wind-down (Cooley LLP, named attorneys), distribution schedules, regulatory comms related to the Coinbits shutdown.
-- prime_trust_lawsuit: Counsel correspondence, settlement offers, court filings, discovery requests, or anything referencing the Prime Trust litigation.
-- investor_relations: Actual humans — current or prospective investors, partners — reaching out. NOT automated investor update newsletters (those are 'newsletter').
-- somerville_purchase: Real estate counsel, purchase docs, title/escrow, seller correspondence for the Somerville property purchase.
+Use your judgment. Do NOT just pattern-match keywords.
 
-Actionable (P2 — routed + auto-archived except 'personal'):
-- invoice: A bill/invoice requesting payment.
-- customer_complaint: A QCC customer complaining about product, shipping, subscription, etc.
-- deal_pitch: An unsolicited pitch for an acquisition, partnership, or investment opportunity.
-- personal: Friends, family, non-business personal correspondence.
+**P1 — time-sensitive / high-stakes. Never auto-archive; MJ gets a Telegram ping.**
+Anything where missing it for 48 hours could cause real harm. Examples (not exhaustive):
+- Legal: attorneys, lawsuits, settlement demands, court filings, regulatory actions, subpoenas
+- Financial: banking issues, fraud alerts on real accounts, large unexpected charges, tax deadlines, loan/investor term-sheet timelines
+- People: real investors/partners/board reaching out (NOT mass investor-update blasts), counterparties, family/health matters, employee matters requiring response
+- Counterparties with money on the line: real estate sellers/lawyers/escrow, acquisition targets mid-negotiation, vendor contract disputes
+- Customer-at-risk: wholesale account threatening to leave, credible threat of chargeback/lawsuit, PR/reputational risk
+- Explicit deadlines ("please respond by [date]") from credible human senders
+- Things MJ specifically called out as priorities:
+  * Coinbits wind-down (Cooley LLP + other counsel, distribution schedules, regulatory comms for the Coinbits shutdown)
+  * Prime Trust lawsuit (any counsel correspondence, filings, settlement)
+  * Investor relations (current or prospective investors/partners reaching out)
+  * Somerville property purchase (real estate counsel, title/escrow, seller)
 
-Noise (P3/P4 — archived):
-- newsletter: Marketing/newsletter content, investor update blasts, industry digests.
-- automated_notification: Mercury, Shopify, Stripe, GitHub, LinkedIn alerts, platform notifications.
-- transactional_receipt: Order confirmations, shipping updates, auto-generated receipts.
-- spam_adjacent: Low-quality outreach, generic sales spam.
-- other: Doesn't fit above — use sparingly.
+**P2 — actionable but not urgent.** Invoices, customer complaints, deal pitches, personal correspondence from friends/family, non-urgent operational requests.
 
-ENTITIES (JSON object, schema varies by category):
+**P3 — noise worth archiving.** Newsletters, automated platform notifications, transactional receipts.
+
+**P4 — low-quality noise.** Spam-adjacent sales outreach, clearly auto-generated junk.
+
+# CATEGORY — choose exactly one
+
+Named priority buckets (use these when they fit — they help MJ filter later):
+- coinbits_legal, prime_trust_lawsuit, investor_relations, somerville_purchase
+
+Actionable buckets:
+- invoice — a bill/invoice requesting payment
+- customer_complaint — QCC customer complaining (product, shipping, subscription)
+- deal_pitch — unsolicited acquisition/partnership/investment pitch
+- personal — friends, family, non-business personal correspondence
+
+Noise buckets:
+- newsletter — marketing content, mass investor blasts, industry digests
+- automated_notification — Mercury/Shopify/Stripe/GitHub/LinkedIn alerts
+- transactional_receipt — order confirmations, shipping updates, auto receipts
+- spam_adjacent — low-quality outreach, generic sales spam
+
+Fallback:
+- other — P1/P2 email that doesn't fit any named bucket above (e.g. a legal matter unrelated to the four named legal topics, an urgent banking issue, an employee matter). Use 'other' when the email is important but the named buckets don't fit — DO NOT force-fit it into a named bucket.
+
+**IMPORTANT:** Priority is independent of category. An email can be `category='other'` with `priority='P1'`. That combination means "important but doesn't fit the named buckets" — it will still stay in MJ's inbox and fire a Telegram ping. Do not downgrade priority just because the category is 'other'.
+
+# ENTITIES (JSON object — schema varies by category)
+
 - invoice: {vendor, amount_cents, currency, invoice_number, due_date (YYYY-MM-DD or null)}
 - customer_complaint: {customer_email, customer_name, order_id, issue_summary, severity ('low'|'med'|'high')}
-- priority categories: {people:[...], firms:[...], action_needed:bool, deadline:YYYY-MM-DD|null, tldr:'...'}
+- priority categories + any P1: {people:[...], firms:[...], action_needed: bool, deadline: YYYY-MM-DD | null, tldr: '...', why_priority: '...'}
 - everything else: {action_needed: false}
 
-OUTPUT (STRICT JSON, no prose, no markdown fences):
+For any P1 (regardless of category), include `tldr` and `why_priority` in entities so MJ can understand the ping at a glance.
+
+# OUTPUT
+
+Strict JSON. No prose, no markdown fences:
 {"category": "<one_of_above>", "priority": "P1"|"P2"|"P3"|"P4", "entities": {...}}"""
 
 
@@ -206,17 +239,24 @@ def _dry_run_enabled() -> bool:
     return os.environ.get("EMAIL_MINING_DRY_RUN", "").lower() in ("1", "true", "yes")
 
 
-def archive_in_gmail(account_key: str, gmail_message_id: str, category: str) -> bool:
+def archive_in_gmail(account_key: str, gmail_message_id: str, category: str,
+                     priority: str = "P3") -> bool:
     """Archive an email in Gmail (remove INBOX + UNREAD labels), subject to safety rules.
 
     Returns True if Gmail was actually mutated, False if skipped.
     Hard guards:
-      - Never archives priority categories.
+      - Never archives P1 (Sonnet-judged high-stakes) regardless of category.
+      - Never archives named priority categories (coinbits_legal, prime_trust_lawsuit,
+        investor_relations, somerville_purchase) as a second safety net.
       - Never archives 'personal' (stays in inbox for human review).
       - Never archives '_error' rows.
       - No-op under EMAIL_MINING_DRY_RUN.
     """
-    if category in NEVER_ARCHIVE:
+    if priority == "P1":
+        return False
+    if category in PRIORITY_CATEGORIES:
+        return False
+    if category in NEVER_ARCHIVE_CATEGORIES:
         return False
     if category == "_error":
         return False
@@ -224,7 +264,7 @@ def archive_in_gmail(account_key: str, gmail_message_id: str, category: str) -> 
         logger.warning(f"archive_in_gmail: unknown category '{category}', refusing to archive")
         return False
     if _dry_run_enabled():
-        logger.info(f"[DRY RUN] would archive {account_key}:{gmail_message_id} ({category})")
+        logger.info(f"[DRY RUN] would archive {account_key}:{gmail_message_id} ({category}/{priority})")
         return False
 
     import google_client
@@ -258,30 +298,38 @@ def maybe_escalate(
     from_addr: str,
     subject: str,
     snippet: str,
+    priority: str = "P3",
+    tldr: str = "",
 ) -> bool:
-    """Fire a Telegram ping if this is a new priority thread.
+    """Fire a Telegram ping if this is a new P1 thread (high-stakes per Sonnet's judgment).
 
-    Returns True if a ping was sent.
+    Named priority categories also trigger escalation (belt-and-suspenders), even if
+    priority happens to be P2 for some reason. Returns True if a ping was sent.
     """
     import memory
     import telegram
 
-    if category not in PRIORITY_CATEGORIES:
+    is_priority = priority == "P1" or category in PRIORITY_CATEGORIES
+    if not is_priority:
         return False
     if memory.thread_already_escalated(gmail_thread_id):
         return False
 
     emoji = _CATEGORY_EMOJI.get(category, "🚨")
-    label = _CATEGORY_LABEL.get(category, category)
+    label = _CATEGORY_LABEL.get(category, category.replace("_", " ").title())
     display_from = f"{from_name} <{from_addr}>" if from_name else from_addr
 
-    text = (
-        f"🚨 {emoji} *{label}* — new thread\n"
-        f"From: {display_from}\n"
-        f"Subject: {subject}\n"
-        f"{(snippet or '')[:200]}\n"
-        f"→ https://app.myshams.ai/inbox/{archive_id}"
-    )
+    body_lines = [
+        f"🚨 {emoji} *{label}* — new P1 thread" if priority == "P1" else f"🚨 {emoji} *{label}* — new thread",
+        f"From: {display_from}",
+        f"Subject: {subject}",
+    ]
+    if tldr:
+        body_lines.append(f"TL;DR: {tldr}")
+    else:
+        body_lines.append((snippet or "")[:200])
+    body_lines.append(f"→ https://app.myshams.ai/inbox/{archive_id}")
+    text = "\n".join(body_lines)
 
     try:
         telegram.send_message(text, parse_mode="Markdown")
@@ -328,11 +376,12 @@ def process_email(email: dict) -> dict:
         source_subject=email.get("subject", ""),
     )
 
-    # 4. Archive in Gmail (with safety net).
+    # 4. Archive in Gmail (with safety net — never archives P1 or named priority).
     gmail_archived = archive_in_gmail(
         account_key=email["account"],
         gmail_message_id=email["gmail_message_id"],
         category=category,
+        priority=priority,
     )
     if gmail_archived and archive_id is not None:
         # Persist the archived flag.
@@ -344,9 +393,10 @@ def process_email(email: dict) -> dict:
                     (archive_id,),
                 )
 
-    # 5. Escalate via Telegram if priority + new thread.
+    # 5. Escalate via Telegram if P1 or named priority category + new thread.
     escalated = False
-    if archive_id is not None and category in PRIORITY_CATEGORIES:
+    is_priority = priority == "P1" or category in PRIORITY_CATEGORIES
+    if archive_id is not None and is_priority:
         escalated = maybe_escalate(
             archive_id=archive_id,
             category=category,
@@ -355,6 +405,8 @@ def process_email(email: dict) -> dict:
             from_addr=email.get("from_addr", ""),
             subject=email.get("subject", ""),
             snippet=email.get("snippet", ""),
+            priority=priority,
+            tldr=entities.get("tldr", "") if isinstance(entities, dict) else "",
         )
 
     return {
