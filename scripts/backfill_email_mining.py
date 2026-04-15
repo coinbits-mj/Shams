@@ -31,12 +31,16 @@ CHUNK_SIZE = 500
 
 
 def list_message_ids(account_key: str, page_token: str | None) -> tuple[list[str], str | None]:
-    """List message IDs in bulk. No query → lists all mail (not just inbox)."""
+    """List message IDs in bulk. Defaults to inbox-only via EMAIL_MINING_QUERY env var
+    (default 'in:inbox'). Set EMAIL_MINING_QUERY='' to iterate all mail."""
     import google_client
     token = google_client._get_access_token(account_key)
     if not token:
         return [], None
     params = {"maxResults": CHUNK_SIZE, "includeSpamTrash": "false"}
+    query = os.environ.get("EMAIL_MINING_QUERY", "in:inbox")
+    if query:
+        params["q"] = query
     if page_token:
         params["pageToken"] = page_token
     r = requests.get(
@@ -52,20 +56,55 @@ def list_message_ids(account_key: str, page_token: str | None) -> tuple[list[str
     return ids, data.get("nextPageToken")
 
 
+def _already_processed_ids(account_key: str, message_ids: list[str]) -> dict:
+    """Return {message_id: (category, priority)} for message_ids already in shams_email_archive.
+    Used to skip Anthropic re-classification when re-processing the same emails."""
+    import db
+    if not message_ids:
+        return {}
+    with db.get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT gmail_message_id, category, priority FROM shams_email_archive "
+                "WHERE account = %s AND gmail_message_id = ANY(%s)",
+                (account_key, message_ids),
+            )
+            return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+
 def process_chunk(account_key: str, message_ids: list[str]) -> dict:
     import email_mining
     import google_client
-    import memory
+    import db
 
     processed = 0
+    skipped = 0
+    archived_only = 0
     errors = 0
     category_counts: dict[str, int] = {}
 
+    # Bulk look up which IDs are already classified — skip the classifier for those,
+    # just retroactively archive in Gmail (cheap, no Anthropic spend).
+    cached = _already_processed_ids(account_key, message_ids)
+
     for mid in message_ids:
-        # Skip if already processed (idempotency).
-        # (A more elaborate check would query shams_email_archive; the UNIQUE
-        # constraint in insert_email_archive also protects us.)
         try:
+            if mid in cached:
+                cat, prio = cached[mid]
+                # Already classified — just retry the Gmail archive (no-op if already archived).
+                ok = email_mining.archive_in_gmail(account_key, mid, cat, priority=prio)
+                if ok:
+                    with db.get_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                "UPDATE shams_email_archive SET gmail_archived = TRUE "
+                                "WHERE account = %s AND gmail_message_id = %s",
+                                (account_key, mid),
+                            )
+                    archived_only += 1
+                skipped += 1
+                continue
+
             full = google_client.fetch_full_message(account_key, mid)
             if not full:
                 errors += 1
@@ -77,7 +116,13 @@ def process_chunk(account_key: str, message_ids: list[str]) -> dict:
             logger.error(f"process error {account_key}:{mid}: {e}")
             errors += 1
 
-    return {"processed": processed, "errors": errors, "categories": category_counts}
+    return {
+        "processed": processed,
+        "skipped_cached": skipped,
+        "archived_only": archived_only,
+        "errors": errors,
+        "categories": category_counts,
+    }
 
 
 def _with_retry(fn, *args, attempts: int = 6, base_delay: float = 2.0, **kwargs):
