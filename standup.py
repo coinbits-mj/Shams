@@ -287,149 +287,53 @@ def run_overnight_loop() -> dict:
 
 
 def _step_email_sweep() -> dict:
-    """Triage all accounts, auto-archive junk, draft replies."""
-    all_emails = []
-    for account_key in config.GOOGLE_ACCOUNTS:
-        try:
-            emails = google_client.get_unread_emails_for_account(account_key, 50)
-            all_emails.extend(emails)
-        except Exception as e:
-            logger.error(f"Email fetch failed for {account_key}: {e}")
+    """Nightly email mining — replaces the old triage job.
 
-    if not all_emails:
-        return {"reply": [], "read": [], "archived": [], "archive_summary": "No unread emails."}
+    Fetches unread messages across all three accounts, runs each through
+    email_mining.process_email(), and returns a summary for the standup digest.
+    """
+    import email_mining
+    import google_client
 
-    # Check which we've already triaged
-    from config import DATABASE_URL
-    import psycopg2
-    with psycopg2.connect(DATABASE_URL) as conn, conn.cursor() as cur:
-        msg_ids = [e["message_id"] for e in all_emails]
-        cur.execute("SELECT message_id FROM shams_email_triage WHERE message_id = ANY(%s)", (msg_ids,))
-        already_triaged = {r[0] for r in cur.fetchall()}
-
-    new_emails = [e for e in all_emails if e["message_id"] not in already_triaged]
-    if not new_emails:
-        return {"reply": [], "read": [], "archived": [], "archive_summary": "No new emails since last triage."}
-
-    # Classify with Claude
-    persona_path = pathlib.Path(__file__).parent / "context" / "inbox_persona.md"
-    inbox_persona = persona_path.read_text() if persona_path.exists() else "Triage emails by tier."
-    api_client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
-    email_text = "\n\n---\n\n".join(
-        f"MESSAGE_ID: {e['message_id']}\nACCOUNT: {e['account']}\n"
-        f"From: {e['from']}\nSubject: {e['subject']}\nSnippet: {e['snippet']}\nDate: {e['date']}"
-        for e in new_emails[:30]
-    )
-    prompt = (
-        f"Triage these {min(len(new_emails), 30)} emails into three tiers:\n\n"
-        f"REPLY — Sender is a real person/contact, asks a question or is time-sensitive. "
-        f"Draft a reply in Maher's voice (direct, concise, professional).\n"
-        f"READ — Informational from a known source. No reply needed but worth seeing.\n"
-        f"ARCHIVE — Promotional, spam, automated notifications with no useful info.\n\n"
-        f"For EACH email:\n"
-        f"MESSAGE_ID: <id>\nTIER: reply|read|archive\nSUMMARY: one-line\nACTION: recommended action\nDRAFT: reply or NONE\n---\n\n"
-        f"Emails:\n\n{email_text}"
-    )
-
-    response = api_client.messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=4096,
-        system=inbox_persona, messages=[{"role": "user", "content": prompt}],
-    )
-    result_text = response.content[0].text
-    email_lookup = {e["message_id"]: e for e in new_emails}
-
-    reply_list, read_list, archived_list = [], [], []
-
-    for block in result_text.split("---"):
-        block = block.strip()
-        if not block:
-            continue
-        fields = {}
-        current_key = None
-        for line in block.split("\n"):
-            # Check if this line starts a new field
-            matched = False
-            for key in ("MESSAGE_ID", "TIER", "SUMMARY", "ACTION", "DRAFT"):
-                if line.upper().startswith(key + ":"):
-                    _, _, v = line.partition(":")
-                    fields[key] = v.strip()
-                    current_key = key
-                    matched = True
-                    break
-            # If not a new field, append to current (handles multi-line drafts)
-            if not matched and current_key:
-                fields[current_key] = fields.get(current_key, "") + "\n" + line
-
-        msg_id = fields.get("MESSAGE_ID", "")
-        email = email_lookup.get(msg_id)
-        if not email:
-            continue
-
-        tier = fields.get("TIER", "archive").lower()
-        if tier not in ("reply", "read", "archive"):
-            tier = "archive"
-        action_text = fields.get("ACTION", "")
-        draft = fields.get("DRAFT", "")
-        summary_text = fields.get("SUMMARY", "")
-        if draft.upper() == "NONE":
-            draft = ""
-
-        triage_id = memory.save_triage_result(
-            account=email["account"], message_id=msg_id,
-            from_addr=email["from"], subject=email["subject"],
-            snippet=email["snippet"], tier=tier,
-            routed_to=[], action=action_text, draft_reply=draft,
-        )
-
-        entry = {
-            "triage_id": triage_id, "account": email["account"],
-            "message_id": msg_id, "from": email["from"],
-            "subject": email["subject"], "summary": summary_text,
-            "draft": draft,
-        }
-
-        if tier == "reply":
-            reply_list.append(entry)
-        elif tier == "read":
-            read_list.append(entry)
-        else:
-            # Auto-archive
-            try:
-                google_client.archive_email(email["account"], msg_id)
-                google_client.mark_read(email["account"], msg_id)
-                memory.mark_email_archived(triage_id)
-            except Exception as e:
-                logger.error(f"Auto-archive failed for {msg_id}: {e}")
-            archived_list.append(entry)
-
-    # Generate archive summary in Shams's words
-    archive_summary = ""
-    if archived_list:
-        subjects = [a["subject"] for a in archived_list[:20]]
-        summary_prompt = (
-            f"Summarize what was auto-archived in one casual sentence. "
-            f"Group by type (e.g., 'Shopify notifications', 'newsletters'). "
-            f"Be specific about the sources.\n\nArchived subjects:\n"
-            + "\n".join(f"- {s}" for s in subjects)
-        )
-        summary_resp = api_client.messages.create(
-            model=config.CLAUDE_MODEL, max_tokens=200,
-            messages=[{"role": "user", "content": summary_prompt}],
-        )
-        archive_summary = summary_resp.content[0].text
-
-    # Log P&L revenue
-    total_triaged = len(reply_list) + len(read_list) + len(archived_list)
-    _log_revenue("email_triage", total_triaged, f"{total_triaged} emails triaged")
-    _log_revenue("draft_reply", len(reply_list), f"{len(reply_list)} draft replies written")
-
-    return {
-        "reply": reply_list,
-        "read": read_list,
-        "archived": archived_list,
-        "archive_summary": archive_summary,
+    stats = {
+        "per_account": {},
+        "categories": {},
+        "escalated": 0,
+        "archived": 0,
+        "errors": 0,
     }
+
+    for account_key in ("qcc", "coinbits", "personal"):
+        acct_stats = {"processed": 0, "errors": 0}
+        try:
+            # Pull up to 100 unread per account per night.
+            message_stubs = google_client.get_unread_emails_for_account(account_key, max_results=100)
+        except Exception as e:
+            logger.error(f"nightly sweep list error {account_key}: {e}")
+            stats["errors"] += 1
+            stats["per_account"][account_key] = {"error": str(e)}
+            continue
+
+        for stub in message_stubs:
+            try:
+                full = google_client.fetch_full_message(account_key, stub["message_id"])
+                if not full:
+                    acct_stats["errors"] += 1
+                    continue
+                result = email_mining.process_email(full)
+                acct_stats["processed"] += 1
+                stats["categories"][result["category"]] = stats["categories"].get(result["category"], 0) + 1
+                if result.get("gmail_archived"):
+                    stats["archived"] += 1
+                if result.get("escalated"):
+                    stats["escalated"] += 1
+            except Exception as e:
+                logger.error(f"nightly sweep process error {account_key}:{stub.get('message_id')}: {e}")
+                acct_stats["errors"] += 1
+
+        stats["per_account"][account_key] = acct_stats
+
+    return stats
 
 
 def _step_mercury_check() -> dict:

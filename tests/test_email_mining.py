@@ -1,0 +1,425 @@
+# tests/test_email_mining.py
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestMemoryHelpers:
+    def test_insert_email_archive_returns_id_and_is_idempotent(self):
+        import memory
+
+        email = {
+            "account": "personal",
+            "gmail_message_id": "test_msg_001",
+            "gmail_thread_id": "test_thread_001",
+            "from_addr": "a@b.com",
+            "from_name": "A B",
+            "to_addrs": ["me@me.com"],
+            "subject": "Test",
+            "date": "2026-04-13T00:00:00Z",
+            "snippet": "hi",
+            "body": "hello world",
+            "category": "other",
+            "priority": "P3",
+            "entities": {"action_needed": False},
+            "processed_model": "claude-sonnet-4-6",
+        }
+
+        id1 = memory.insert_email_archive(email)
+        assert id1 is not None
+
+        # Re-insert same message — should return existing id, not duplicate.
+        id2 = memory.insert_email_archive(email)
+        assert id2 == id1
+
+    def test_insert_ap_invoice(self):
+        import memory
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_ap_001",
+            "gmail_thread_id": "t1",
+            "subject": "Invoice",
+            "category": "invoice",
+            "priority": "P2",
+            "entities": {},
+        })
+        inv_id = memory.insert_ap_invoice({
+            "archive_id": archive_id,
+            "vendor": "Sysco",
+            "amount_cents": 124000,
+            "currency": "USD",
+            "invoice_number": "INV-001",
+            "due_date": "2026-04-25",
+            "notes": None,
+        })
+        assert inv_id is not None
+
+    def test_insert_cx_complaint(self):
+        import memory
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_cx_001",
+            "gmail_thread_id": "t2",
+            "subject": "Problem",
+            "category": "customer_complaint",
+            "priority": "P2",
+            "entities": {},
+        })
+        cx_id = memory.insert_cx_complaint({
+            "archive_id": archive_id,
+            "customer_email": "c@c.com",
+            "customer_name": "C",
+            "issue_summary": "stale coffee",
+            "severity": "med",
+        })
+        assert cx_id is not None
+
+    def test_thread_escalation_tracking(self):
+        import memory
+
+        archive_id = memory.insert_email_archive({
+            "account": "coinbits",
+            "gmail_message_id": "msg_legal_001",
+            "gmail_thread_id": "thread_legal_xyz",
+            "subject": "Legal",
+            "category": "coinbits_legal",
+            "priority": "P1",
+            "entities": {},
+        })
+        assert memory.thread_already_escalated("thread_legal_xyz") is False
+        memory.record_thread_escalation("thread_legal_xyz", "coinbits_legal", archive_id)
+        assert memory.thread_already_escalated("thread_legal_xyz") is True
+
+    def test_backfill_cursor(self):
+        import memory
+
+        assert memory.get_backfill_cursor("personal") is None
+        memory.set_backfill_cursor("personal", "page_token_abc")
+        assert memory.get_backfill_cursor("personal") == "page_token_abc"
+        memory.set_backfill_cursor("personal", "page_token_def")
+        assert memory.get_backfill_cursor("personal") == "page_token_def"
+
+
+class TestClassifier:
+    """Tests classifier output shape and category coverage.
+
+    Uses mocked anthropic client; no real API calls.
+    """
+
+    def test_classify_returns_expected_shape(self, monkeypatch):
+        import email_mining
+
+        # Mock the anthropic call to return a known classification.
+        def fake_call(messages, system):
+            return '{"category":"invoice","priority":"P2","entities":{"vendor":"Sysco","amount_cents":124000,"currency":"USD","invoice_number":"INV-001","due_date":"2026-04-25"}}'
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+
+        result = email_mining.classify_and_extract({
+            "from_addr": "billing@sysco.com",
+            "subject": "Invoice INV-001",
+            "snippet": "Your invoice for $1,240.00 is attached.",
+            "body": "Dear customer, please find attached invoice INV-001 for $1,240.00 due 2026-04-25.",
+        })
+
+        assert result["category"] == "invoice"
+        assert result["priority"] == "P2"
+        assert result["entities"]["vendor"] == "Sysco"
+        assert result["entities"]["amount_cents"] == 124000
+
+    def test_classify_unknown_category_falls_back_to_other(self, monkeypatch):
+        import email_mining
+
+        def fake_call(messages, system):
+            return '{"category":"not_a_real_category","priority":"P3","entities":{}}'
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+        result = email_mining.classify_and_extract({
+            "from_addr": "x@y.com", "subject": "hi", "snippet": "hi", "body": "hi"
+        })
+        assert result["category"] == "other"
+        assert result["priority"] == "P3"
+
+    def test_classify_malformed_json_returns_error_category(self, monkeypatch):
+        import email_mining
+
+        def fake_call(messages, system):
+            return "this is not json at all"
+
+        monkeypatch.setattr(email_mining, "_call_sonnet", fake_call)
+        result = email_mining.classify_and_extract({
+            "from_addr": "x@y.com", "subject": "hi", "snippet": "hi", "body": "hi"
+        })
+        assert result["category"] == "_error"
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestRouter:
+    def test_route_invoice_creates_ap_queue_row(self):
+        import email_mining, memory, db
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_route_inv_001",
+            "gmail_thread_id": "t_inv",
+            "subject": "Invoice",
+            "category": "invoice",
+            "priority": "P2",
+            "entities": {},
+        })
+        email_mining.route_extracted(
+            archive_id=archive_id,
+            category="invoice",
+            entities={"vendor": "Odeko", "amount_cents": 85000, "currency": "USD",
+                      "invoice_number": "ODK-42", "due_date": "2026-05-01"},
+        )
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT vendor, amount_cents, invoice_number FROM shams_ap_queue WHERE archive_id = %s", (archive_id,))
+                row = cur.fetchone()
+        assert row == ("Odeko", 85000, "ODK-42")
+
+    def test_route_customer_complaint_creates_cx_row(self):
+        import email_mining, memory, db
+
+        archive_id = memory.insert_email_archive({
+            "account": "qcc",
+            "gmail_message_id": "msg_route_cx_001",
+            "gmail_thread_id": "t_cx",
+            "subject": "stale",
+            "category": "customer_complaint",
+            "priority": "P2",
+            "entities": {},
+        })
+        email_mining.route_extracted(
+            archive_id=archive_id,
+            category="customer_complaint",
+            entities={"customer_email": "c@c.com", "customer_name": "C",
+                      "issue_summary": "stale beans", "severity": "high"},
+        )
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT customer_email, severity FROM shams_cx_log WHERE archive_id = %s", (archive_id,))
+                row = cur.fetchone()
+        assert row == ("c@c.com", "high")
+
+    def test_route_deal_pitch_calls_create_deal(self, monkeypatch):
+        import email_mining
+
+        captured = {}
+        def fake_create_deal(**kwargs):
+            captured.update(kwargs)
+            return 42
+        monkeypatch.setattr("memory.create_deal", fake_create_deal)
+
+        email_mining.route_extracted(
+            archive_id=1,
+            category="deal_pitch",
+            entities={"title": "Red House Roasters buyout",
+                      "deal_type": "acquisition",
+                      "contact": "broker@x.com"},
+            source_subject="Possible sale",
+        )
+        assert captured["title"] == "Red House Roasters buyout"
+        assert captured["deal_type"] == "acquisition"
+
+    def test_route_noise_does_nothing(self):
+        import email_mining
+        # Should not raise, no side effects.
+        email_mining.route_extracted(archive_id=None, category="newsletter", entities={})
+
+
+class TestArchiver:
+    def test_archive_skips_priority_categories(self, monkeypatch):
+        import email_mining
+
+        called = {"archive": False, "mark_read": False}
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: called.update({"archive": True}) or True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: called.update({"mark_read": True}) or True)
+
+        for cat in email_mining.PRIORITY_CATEGORIES:
+            called["archive"] = False
+            called["mark_read"] = False
+            result = email_mining.archive_in_gmail("personal", "msg1", category=cat)
+            assert result is False, f"priority category {cat} should NOT archive"
+            assert called["archive"] is False
+            assert called["mark_read"] is False
+
+    def test_archive_skips_personal(self, monkeypatch):
+        import email_mining
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: True)
+        assert email_mining.archive_in_gmail("personal", "msg1", category="personal") is False
+
+    def test_archive_skips_error(self, monkeypatch):
+        import email_mining
+        monkeypatch.setattr("google_client.archive_email", lambda *a, **kw: True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a, **kw: True)
+        assert email_mining.archive_in_gmail("personal", "msg1", category="_error") is False
+
+    def test_archive_noise_calls_gmail(self, monkeypatch):
+        import email_mining
+
+        calls = []
+        monkeypatch.setattr("google_client.archive_email", lambda acct, mid: calls.append(("archive", acct, mid)) or True)
+        monkeypatch.setattr("google_client.mark_read", lambda acct, mid: calls.append(("mark_read", acct, mid)) or True)
+
+        result = email_mining.archive_in_gmail("coinbits", "msgXYZ", category="newsletter")
+        assert result is True
+        assert ("archive", "coinbits", "msgXYZ") in calls
+        assert ("mark_read", "coinbits", "msgXYZ") in calls
+
+    def test_archive_respects_dry_run(self, monkeypatch):
+        import email_mining
+
+        monkeypatch.setenv("EMAIL_MINING_DRY_RUN", "true")
+        calls = []
+        monkeypatch.setattr("google_client.archive_email", lambda *a: calls.append("archive") or True)
+        monkeypatch.setattr("google_client.mark_read", lambda *a: calls.append("mark_read") or True)
+
+        result = email_mining.archive_in_gmail("coinbits", "msgXYZ", category="newsletter")
+        assert result is False, "dry-run should not touch Gmail"
+        assert calls == []
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestEscalator:
+    def test_new_thread_fires_telegram(self, monkeypatch):
+        import email_mining, memory
+
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        archive_id = memory.insert_email_archive({
+            "account": "coinbits",
+            "gmail_message_id": "msg_esc_new_001",
+            "gmail_thread_id": "thread_esc_new_001",
+            "from_addr": "counsel@cooley.com",
+            "from_name": "Sarah Goldstein",
+            "subject": "Re: Final distribution",
+            "snippet": "Per our call yesterday...",
+            "category": "coinbits_legal",
+            "priority": "P1",
+            "entities": {},
+        })
+        email_mining.maybe_escalate(archive_id=archive_id,
+                                    category="coinbits_legal",
+                                    gmail_thread_id="thread_esc_new_001",
+                                    from_name="Sarah Goldstein",
+                                    from_addr="counsel@cooley.com",
+                                    subject="Re: Final distribution",
+                                    snippet="Per our call yesterday...")
+        assert len(sent) == 1
+        assert "coinbits_legal" in sent[0].lower() or "coinbits" in sent[0].lower()
+        assert "Sarah" in sent[0]
+
+    def test_reply_on_existing_thread_does_not_fire(self, monkeypatch):
+        import email_mining, memory
+
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        archive_id = memory.insert_email_archive({
+            "account": "coinbits",
+            "gmail_message_id": "msg_esc_existing_001",
+            "gmail_thread_id": "thread_esc_existing_001",
+            "category": "coinbits_legal",
+            "priority": "P1",
+            "entities": {},
+        })
+        memory.record_thread_escalation("thread_esc_existing_001", "coinbits_legal", archive_id)
+
+        email_mining.maybe_escalate(archive_id=archive_id,
+                                    category="coinbits_legal",
+                                    gmail_thread_id="thread_esc_existing_001",
+                                    from_name="X", from_addr="x@y.com",
+                                    subject="Re:", snippet="...")
+        assert sent == []
+
+    def test_non_priority_does_not_fire(self, monkeypatch):
+        import email_mining
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: sent.append(text) or True)
+
+        email_mining.maybe_escalate(archive_id=999, category="invoice",
+                                    gmail_thread_id="whatever",
+                                    from_name="V", from_addr="v@v.com",
+                                    subject="inv", snippet="...")
+        assert sent == []
+
+
+@pytest.mark.usefixtures("setup_db")
+class TestProcessEmail:
+    def test_process_invoice_end_to_end(self, monkeypatch):
+        """Invoice flows through classifier -> archive row -> AP queue -> Gmail archive."""
+        import email_mining, db
+
+        monkeypatch.setattr(email_mining, "_call_sonnet",
+            lambda *a, **kw: '{"category":"invoice","priority":"P2","entities":{"vendor":"Sysco","amount_cents":124000,"currency":"USD","invoice_number":"INV-E2E-001","due_date":"2026-05-01"}}')
+        gmail_calls = []
+        monkeypatch.setattr("google_client.archive_email",
+            lambda acct, mid: gmail_calls.append(("archive", acct, mid)) or True)
+        monkeypatch.setattr("google_client.mark_read",
+            lambda acct, mid: gmail_calls.append(("mark_read", acct, mid)) or True)
+
+        email = {
+            "account": "qcc",
+            "gmail_message_id": "msg_e2e_inv_001",
+            "gmail_thread_id": "thread_e2e_inv_001",
+            "from_addr": "billing@sysco.com",
+            "from_name": "Sysco Billing",
+            "to_addrs": ["maher@qcitycoffee.com"],
+            "subject": "Invoice INV-E2E-001",
+            "date": "2026-04-13T00:00:00Z",
+            "snippet": "Your invoice is attached",
+            "body": "Please find attached invoice INV-E2E-001 for $1,240.00 due 2026-05-01",
+        }
+        result = email_mining.process_email(email)
+        assert result["archive_id"] is not None
+        assert result["category"] == "invoice"
+        assert result["gmail_archived"] is True
+
+        with db.get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT invoice_number FROM shams_ap_queue WHERE archive_id = %s",
+                            (result["archive_id"],))
+                assert cur.fetchone() == ("INV-E2E-001",)
+                cur.execute("SELECT gmail_archived FROM shams_email_archive WHERE id = %s",
+                            (result["archive_id"],))
+                assert cur.fetchone() == (True,)
+        assert ("archive", "qcc", "msg_e2e_inv_001") in gmail_calls
+
+    def test_process_priority_does_not_archive_and_fires_telegram(self, monkeypatch):
+        """Priority email stays in inbox, fires Telegram on first thread occurrence."""
+        import email_mining, uuid
+
+        monkeypatch.setattr(email_mining, "_call_sonnet",
+            lambda *a, **kw: '{"category":"coinbits_legal","priority":"P1","entities":{"tldr":"review settlement draft"}}')
+        gmail_calls = []
+        monkeypatch.setattr("google_client.archive_email",
+            lambda *a: gmail_calls.append("archive") or True)
+        sent = []
+        monkeypatch.setattr("telegram.send_message", lambda t, **kw: sent.append(t) or True)
+
+        uniq = uuid.uuid4().hex[:12]
+        email = {
+            "account": "coinbits",
+            "gmail_message_id": f"msg_e2e_legal_{uniq}",
+            "gmail_thread_id": f"thread_e2e_legal_{uniq}",
+            "from_addr": "sgoldstein@cooley.com",
+            "from_name": "Sarah Goldstein",
+            "to_addrs": ["maher@coinbits.app"],
+            "subject": "Re: distribution",
+            "date": "2026-04-13T00:00:00Z",
+            "snippet": "Please review the attached draft",
+            "body": "Per our discussion...",
+        }
+        result = email_mining.process_email(email)
+        assert result["category"] == "coinbits_legal"
+        assert result["gmail_archived"] is False
+        assert result["escalated"] is True
+        assert gmail_calls == []
+        assert len(sent) == 1
