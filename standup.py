@@ -288,6 +288,13 @@ def run_overnight_loop() -> dict:
         results["commitments"] = {"scanned": 0, "commitments_extracted": 0, "overdue": [], "overdue_count": 0, "error": str(e)}
         status = "partial"
 
+    # Step 9: Crypto ticker — BTC/ETH spot price + 24h change
+    try:
+        results["crypto"] = _step_crypto_ticker()
+    except Exception as e:
+        logger.error(f"Crypto ticker fetch failed: {e}", exc_info=True)
+        results["crypto"] = {}
+
     # Save results
     summary = _build_overnight_summary(results)
     memory.update_overnight_run(run_id, status=status, results=results, summary=summary)
@@ -981,6 +988,46 @@ def _days_since(contact: dict) -> int:
     return (now - latest).days
 
 
+# ── Crypto ticker step ─────────────────────────────────────────────────────
+
+
+def _step_crypto_ticker() -> dict:
+    """Fetch BTC + ETH spot price + 24h change from CoinGecko. Returns {} on any failure."""
+    import requests
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={
+                "ids": "bitcoin,ethereum",
+                "vs_currencies": "usd",
+                "include_24hr_change": "true",
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        logger.warning(f"CoinGecko unreachable: {e}")
+        return {}
+    if not r.ok:
+        logger.error(f"CoinGecko error {r.status_code}")
+        return {}
+    try:
+        data = r.json()
+    except Exception:
+        return {}
+    out = {}
+    if "bitcoin" in data:
+        out["btc"] = {
+            "usd": data["bitcoin"].get("usd"),
+            "change_24h": data["bitcoin"].get("usd_24h_change"),
+        }
+    if "ethereum" in data:
+        out["eth"] = {
+            "usd": data["ethereum"].get("usd"),
+            "change_24h": data["ethereum"].get("usd_24h_change"),
+        }
+    return out
+
+
 # ── Open commitments step ─────────────────────────────────────────────────
 
 
@@ -1258,10 +1305,26 @@ def _build_overview_message(results: dict) -> str:
         prep_note = f" · ⚠️ {len(prep_briefs)} need prep" if prep_briefs else ""
         lines.append(f"📅 {len(events)} meetings today{prep_note}")
 
-    # Reminders
+    # Reminders — surface top 1-2 actual items, not just a count
     reminders = results.get("reminders", [])
     if reminders:
-        lines.append(f"🔔 {len(reminders)} things you might be forgetting")
+        # Prefer deadline-based reminders (sorted by soonest), fallback to stale missions
+        def _rem_key(r):
+            t = r.get("type", "")
+            # deadlines first (closer = higher priority), then stale
+            if t in {"mission_deadline", "deal_deadline"}:
+                return (0, r.get("title", "") or "")
+            return (1, r.get("title", "") or "")
+        top = sorted(reminders, key=_rem_key)[:2]
+        chunks = []
+        for r in top:
+            title = (r.get("title") or "?").strip()
+            if len(title) > 32:
+                title = title[:32] + "…"
+            chunks.append(title)
+        more = len(reminders) - len(top)
+        tail = f" · +{more}" if more > 0 else ""
+        lines.append(f"🔔 {' · '.join(chunks)}{tail}")
 
     # Scout
     scout = results.get("scout", {})
@@ -1286,6 +1349,27 @@ def _build_overview_message(results: dict) -> str:
         if cold_count:
             parts_rel.append(f"{cold_count} going cold")
         lines.append(f"🤝 {' · '.join(parts_rel)}")
+
+    # Crypto ticker (BTC + ETH)
+    crypto = results.get("crypto") or {}
+    if crypto.get("btc"):
+        def _fmt_crypto(tag: str, data: dict) -> str:
+            usd = data.get("usd") or 0
+            pct = data.get("change_24h")
+            if usd >= 10000:
+                price = f"${usd/1000:.0f}K"
+            elif usd >= 1000:
+                price = f"${usd/1000:.1f}K"
+            else:
+                price = f"${usd:,.0f}"
+            if pct is not None:
+                sign = "-" if pct < 0 else "+"
+                return f"{tag} {price} ({sign}{abs(pct):.1f}%)"
+            return f"{tag} {price}"
+        parts_c = [_fmt_crypto("BTC", crypto["btc"])]
+        if crypto.get("eth"):
+            parts_c.append(_fmt_crypto("ETH", crypto["eth"]))
+        lines.append(f"🪙 {' · '.join(parts_c)}")
 
     # Open commitments (unfulfilled promises MJ made in sent emails)
     commit = results.get("commitments", {})
