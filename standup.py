@@ -398,20 +398,41 @@ def _step_mercury_check() -> dict:
 
 
 def _step_rumi_check() -> dict:
-    """Pull yesterday's P&L, inventory alerts, action items from Rumi."""
+    """Pull yesterday's P&L + per-location MTD briefing + inventory alerts + actions."""
     result = {
         "revenue": 0, "cogs": 0, "margin": 0, "orders": 0,
         "wholesale_orders": 0, "alerts": [], "action_items": [],
+        "locations": {},  # {clifton: {...}, plainfield: {...}}
     }
 
+    # Yesterday's combined P&L (legacy field — kept for existing overview logic)
     pl = rumi_client.get_daily_pl("yesterday")
     if pl:
         result["revenue"] = pl.get("revenue", 0)
         result["cogs"] = pl.get("cogs", 0)
-        margin = pl.get("net_margin_pct", 0)
-        result["margin"] = margin
+        result["margin"] = pl.get("net_margin_pct", 0)
         result["orders"] = pl.get("order_count", 0)
         result["wholesale_orders"] = pl.get("wholesale_count", 0)
+
+    # Per-location MTD briefings — WoW variance + MTD rev + MTD margin
+    for loc in ("clifton", "plainfield"):
+        try:
+            b = rumi_client.get_briefing_summary(location=loc)
+            if not b:
+                continue
+            result["locations"][loc] = {
+                "mtd_revenue": b.get("mtd_revenue", 0),
+                "mtd_net_profit": b.get("mtd_net_profit", 0),
+                "mtd_margin_pct": b.get("mtd_avg_net_margin_pct", 0),
+                "mtd_prime_cost_pct": b.get("mtd_avg_prime_cost_pct", 0),
+                "mtd_days": b.get("mtd_days", 0),
+                "yesterday_revenue": b.get("revenue", 0),
+                "yesterday_margin_pct": b.get("net_margin_pct", 0),
+                "wow_change_pct": b.get("revenue_wow_change_pct"),
+                "prime_cost_pct": b.get("prime_cost_pct"),
+            }
+        except Exception as e:
+            logger.error(f"Rumi briefing fetch failed for {loc}: {e}")
 
     try:
         action_items = rumi_client.get_action_items()
@@ -1193,16 +1214,41 @@ def _build_overview_message(results: dict) -> str:
                 break
         lines.append(f"💰 Total cash: ${total:,.0f}{alert_text}")
 
-    # Rumi
+    # Rumi — per-location MTD line (preferred when available), fallback to yesterday-only
     rumi = results.get("rumi", {})
-    if rumi.get("revenue"):
+    locs = rumi.get("locations") or {}
+
+    def _fmt_money(n: float) -> str:
+        n = n or 0
+        if abs(n) >= 1000:
+            return f"${n/1000:.1f}K"
+        return f"${n:,.0f}"
+
+    def _fmt_loc(label: str, data: dict) -> str:
+        rev = data.get("mtd_revenue", 0)
+        mgn = data.get("mtd_margin_pct", 0)
+        wow = data.get("wow_change_pct")
+        chunks = [f"{label} {_fmt_money(rev)} MTD {mgn:.0f}%"]
+        if wow is not None and abs(wow) >= 5:
+            sign = "-" if wow < 0 else "+"
+            marker = " ⚠️" if wow <= -10 else ""
+            chunks.append(f"WoW {sign}{abs(wow):.0f}%{marker}")
+        return " · ".join(chunks)
+
+    if locs:
+        loc_lines = []
+        if locs.get("clifton"):
+            loc_lines.append(_fmt_loc("Clif", locs["clifton"]))
+        if locs.get("plainfield"):
+            loc_lines.append(_fmt_loc("Plain", locs["plainfield"]))
+        if loc_lines:
+            lines.append(f"📊 {' · '.join(loc_lines)}")
+    elif rumi.get("revenue"):
+        # Fallback: no per-location data, show old yesterday-only line
         margin_pct = rumi.get("margin", 0)
-        if isinstance(margin_pct, float) and margin_pct < 1:
-            margin_display = f"{margin_pct:.0%}"
-        else:
-            margin_display = f"{margin_pct:.1f}%"
+        margin_display = f"{margin_pct:.0%}" if isinstance(margin_pct, float) and margin_pct < 1 else f"{margin_pct:.1f}%"
         orders = rumi.get("orders", 0)
-        lines.append(f"📊 Yesterday: ${rumi['revenue']:,.0f} rev / {margin_display} margin / {orders} orders")
+        lines.append(f"📊 Yesterday: ${rumi['revenue']:,.0f} / {margin_display} / {orders} orders")
 
     # Calendar
     calendar = results.get("calendar", {})

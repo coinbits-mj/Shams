@@ -59,8 +59,12 @@ def get_inventory_alerts() -> dict | None:
     return _get("/api/inventory/alerts")
 
 
-def get_briefing_summary() -> dict | None:
-    return _get("/api/briefing/summary")
+def get_briefing_summary(location: str = "clifton") -> dict | None:
+    """Fetch Rumi briefing summary for a location.
+    Known locations: 'clifton', 'plainfield', 'combined'.
+    Returns MTD totals, WoW variance, yesterday's P&L, prime cost %, margins.
+    """
+    return _get("/api/briefing/summary", {"location": location})
 
 
 def get_briefing_bundle() -> dict | None:
