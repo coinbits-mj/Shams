@@ -275,6 +275,19 @@ def run_overnight_loop() -> dict:
         results["relationships"] = {"contacts_updated": 0, "new_contacts": 0, "cooling": [], "cold": [], "follow_ups_drafted": 0}
         status = "partial"
 
+    # Step 8: Open commitments scan — sent emails from last 24h, extract promises
+    try:
+        results["commitments"] = _step_commitments_check()
+        memory.log_activity("shams", "overnight", "Commitments scan complete", {
+            "scanned": results["commitments"]["scanned"],
+            "extracted": results["commitments"]["commitments_extracted"],
+            "overdue_surfaced": results["commitments"]["overdue_count"],
+        })
+    except Exception as e:
+        logger.error(f"Overnight commitments scan failed: {e}", exc_info=True)
+        results["commitments"] = {"scanned": 0, "commitments_extracted": 0, "overdue": [], "overdue_count": 0, "error": str(e)}
+        status = "partial"
+
     # Save results
     summary = _build_overnight_summary(results)
     memory.update_overnight_run(run_id, status=status, results=results, summary=summary)
@@ -947,6 +960,91 @@ def _days_since(contact: dict) -> int:
     return (now - latest).days
 
 
+# ── Open commitments step ─────────────────────────────────────────────────
+
+
+def _step_commitments_check() -> dict:
+    """Nightly: pull last 24h of sent emails, extract commitments, surface overdue.
+
+    Returns: {scanned, commitments_extracted, overdue, overdue_count}
+    """
+    import commitments
+    import google_client
+
+    stats = {
+        "scanned": 0,
+        "commitments_extracted": 0,
+        "errors": 0,
+        "per_account": {},
+    }
+
+    accounts = ("qcc", "coinbits", "personal")
+    for account_key in accounts:
+        acct_stats = {"scanned": 0, "extracted": 0, "errors": 0}
+        try:
+            stubs = google_client.search_emails(
+                query=f"in:sent newer_than:2d",
+                max_results=50,
+            )
+            stubs = [s for s in stubs if s.get("account") == account_key]
+        except Exception as e:
+            logger.error(f"commitments: gmail search error {account_key}: {e}")
+            stats["errors"] += 1
+            continue
+
+        for stub in stubs:
+            mid = stub.get("message_id")
+            try:
+                full = google_client.fetch_full_message(account_key, mid)
+                if not full or full.get("from_addr") not in commitments.MJ_ADDRESSES:
+                    continue
+
+                # Ensure archive row exists (idempotent)
+                archive_id = memory.insert_email_archive({
+                    **full,
+                    "category": "other",
+                    "priority": "P3",
+                    "entities": {},
+                    "processed_model": "commitments-step",
+                })
+                if not archive_id:
+                    continue
+
+                full["id"] = archive_id
+                c = commitments.extract_commitments_from_email(full)
+                if c:
+                    inserted = commitments.persist_commitments(
+                        archive_id=archive_id,
+                        account=account_key,
+                        recipient_email=(full.get("to_addrs") or [None])[0],
+                        recipient_name=full.get("from_name"),
+                        promised_at=full.get("date"),
+                        commitments=c,
+                    )
+                    acct_stats["extracted"] += inserted
+                    stats["commitments_extracted"] += inserted
+
+                acct_stats["scanned"] += 1
+                stats["scanned"] += 1
+            except Exception as e:
+                logger.error(f"commitments: process error {account_key}:{mid}: {e}")
+                acct_stats["errors"] += 1
+                stats["errors"] += 1
+
+        stats["per_account"][account_key] = acct_stats
+
+    # Pull the top overdue commitments for the morning standup
+    try:
+        overdue = commitments.get_overdue_commitments(days_overdue=3, limit=5)
+    except Exception as e:
+        logger.error(f"commitments: get_overdue error: {e}")
+        overdue = []
+
+    stats["overdue"] = overdue
+    stats["overdue_count"] = len(overdue)
+    return stats
+
+
 # ── Summary builder ────────────────────────────────────────────────────────
 
 
@@ -1142,6 +1240,20 @@ def _build_overview_message(results: dict) -> str:
         if cold_count:
             parts_rel.append(f"{cold_count} going cold")
         lines.append(f"🤝 {' · '.join(parts_rel)}")
+
+    # Open commitments (unfulfilled promises MJ made in sent emails)
+    commit = results.get("commitments", {})
+    overdue = commit.get("overdue", []) or []
+    if overdue:
+        # Format: 🔴 Open: Annie→Mo 14d · Brandon 7 items
+        chunks = []
+        for oc in overdue[:3]:
+            recip = (oc.get("recipient_name") or oc.get("recipient_email") or "?").split("@")[0][:20]
+            days = oc.get("days_old") or 0
+            chunks.append(f"{recip} {days}d")
+        more = len(overdue) - 3
+        tail = f" · +{more} more" if more > 0 else ""
+        lines.append(f"🔴 Open: {' · '.join(chunks)}{tail}")
 
     # Daily P&L
     try:
