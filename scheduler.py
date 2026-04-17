@@ -396,6 +396,17 @@ def mission_stale_check():
         logger.error(f"Mission stale check error: {e}")
 
 
+def _check_meeting_preps():
+    """Poll for upcoming meetings and send prep briefs. Runs every 10 min."""
+    try:
+        from meeting_prep import check_upcoming_meetings
+        sent = check_upcoming_meetings()
+        if sent:
+            logger.info(f"Meeting prep: sent {sent} brief(s)")
+    except Exception as e:
+        logger.error(f"Meeting prep check error: {e}")
+
+
 # ── Scheduler init ──────────────────────────────────────────────────────────
 
 def init_scheduler():
@@ -413,9 +424,10 @@ def init_scheduler():
     scheduler.add_job(smart_alerts_check, "interval", hours=1, id="smart_alerts")  # every hour
     scheduler.add_job(send_weekly_pl_digest, "cron", day_of_week="sun", hour=1, minute=0, id="weekly_pl")
     scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")
+    scheduler.add_job(_check_meeting_preps, "interval", minutes=10, id="meeting_prep_check")
     scheduler.start()
     logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
-    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily)")
+    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min)")
 
     # Load dynamic tasks from database
     _load_dynamic_tasks()

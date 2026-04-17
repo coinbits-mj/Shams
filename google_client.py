@@ -294,10 +294,23 @@ def get_todays_events() -> list[dict]:
         for event in r.json().get("items", []):
             s = event.get("start", {}).get("dateTime", event.get("start", {}).get("date", ""))
             e = event.get("end", {}).get("dateTime", event.get("end", {}).get("date", ""))
+            attendees = []
+            for a in event.get("attendees", []):
+                attendees.append({
+                    "email": a.get("email", ""),
+                    "name": a.get("displayName", ""),
+                    "response": a.get("responseStatus", ""),
+                    "self": a.get("self", False),
+                })
             events.append({
                 "summary": event.get("summary", ""),
                 "start": s, "end": e,
                 "location": event.get("location", ""),
+                "event_id": event.get("id", ""),
+                "attendees": attendees,
+                "description": event.get("description", ""),
+                "hangout_link": event.get("hangoutLink", ""),
+                "organizer": event.get("organizer", {}).get("email", ""),
             })
         return events
     except Exception as e:
