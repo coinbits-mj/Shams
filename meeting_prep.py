@@ -36,6 +36,9 @@ def check_upcoming_meetings() -> int:
     Designed to run every 10 min via APScheduler interval job.
     Returns count of preps sent.
     """
+    if os.environ.get("MEETING_PREP_DISABLED", "").lower() in ("1", "true", "yes"):
+        return 0
+
     import google_client
 
     events = google_client.get_todays_events()
