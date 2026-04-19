@@ -407,6 +407,55 @@ def _check_meeting_preps():
         logger.error(f"Meeting prep check error: {e}")
 
 
+_MEDIA_READY_STATUSES = {"downloaded", "ready", "completed", "imported"}
+
+
+def poll_media_downloads():
+    """Refresh bridge status for active media downloads; ping MJ when items go ready."""
+    try:
+        import media_client
+        active = memory.get_active_media_downloads()
+        if not active:
+            return
+
+        ready_messages = []
+        for row in active:
+            bridge_id = row.get("bridge_id")
+            if not bridge_id:
+                continue
+            try:
+                live = media_client.get_status(bridge_id)
+            except Exception as e:
+                logger.warning(f"Status poll failed for download #{row['id']}: {e}")
+                continue
+
+            status = (live.get("status") or "").lower() or row.get("status")
+            progress = live.get("progress_pct")
+            eta = live.get("eta_seconds")
+            memory.update_media_download(
+                row["id"],
+                status=status,
+                progress_pct=progress,
+                eta_seconds=eta,
+            )
+            if status in _MEDIA_READY_STATUSES and not row.get("notified_ready"):
+                label = row["title"]
+                if row.get("season"):
+                    label += f" S{row['season']:02d}"
+                if row.get("quality"):
+                    label += f" ({row['quality']})"
+                ready_messages.append(label)
+                memory.update_media_download(row["id"], notified_ready=True)
+
+        if ready_messages and config.TELEGRAM_CHAT_ID:
+            body = "✅ Ready in Jellyfin:\n" + "\n".join(f"• {m}" for m in ready_messages)
+            send_telegram(config.TELEGRAM_CHAT_ID, body)
+            for m in ready_messages:
+                memory.log_activity("shams", "media_ready", m)
+    except Exception as e:
+        logger.error(f"Media download poll error: {e}", exc_info=True)
+
+
 # ── Scheduler init ──────────────────────────────────────────────────────────
 
 def init_scheduler():
@@ -425,9 +474,10 @@ def init_scheduler():
     scheduler.add_job(send_weekly_pl_digest, "cron", day_of_week="sun", hour=1, minute=0, id="weekly_pl")
     scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")
     scheduler.add_job(_check_meeting_preps, "interval", minutes=10, id="meeting_prep_check")
+    scheduler.add_job(poll_media_downloads, "interval", minutes=5, id="media_download_poll")
     scheduler.start()
     logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
-    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min)")
+    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min), media downloads (5min)")
 
     # Load dynamic tasks from database
     _load_dynamic_tasks()

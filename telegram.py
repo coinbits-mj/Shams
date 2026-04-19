@@ -79,6 +79,68 @@ def send_message(text: str, **kwargs) -> bool:
         return False
 
 
+def _track_media_request(media_type: str, title: str, quality: str, result: dict, season: int | None = None) -> None:
+    """Persist a movie/TV request so /downloads and the poller can see it."""
+    try:
+        from tools.media import _bridge_id_from_result
+        bridge_id = _bridge_id_from_result(result) if isinstance(result, dict) else None
+        status = (result.get("status") if isinstance(result, dict) else None) or "requested"
+        memory.record_media_download(
+            media_type=media_type,
+            title=(result.get("title") if isinstance(result, dict) else None) or title,
+            bridge_id=bridge_id,
+            season=season,
+            quality=quality,
+            status=status,
+        )
+    except Exception as e:
+        logger.error(f"Failed to record media download: {e}")
+
+
+def _format_downloads_summary() -> str:
+    """Human-readable summary of active media downloads for Telegram."""
+    import media_client
+    from tools.media import _humanize_eta
+
+    active = memory.get_active_media_downloads()
+    if not active:
+        return "No active downloads. Ask for a movie or show and I'll add it."
+
+    lines = [f"🎬 {len(active)} active download(s):"]
+    for row in active:
+        label = row["title"]
+        if row.get("season"):
+            label += f" S{row['season']:02d}"
+        if row.get("quality"):
+            label += f" ({row['quality']})"
+
+        status = row.get("status") or "requested"
+        progress = row.get("progress_pct")
+        eta_seconds = row.get("eta_seconds")
+
+        # Refresh from bridge when we have an id and the DB view looks stale
+        if row.get("bridge_id"):
+            try:
+                live = media_client.get_status(row["bridge_id"])
+                status = live.get("status") or status
+                progress = live.get("progress_pct", progress)
+                eta_seconds = live.get("eta_seconds", eta_seconds)
+            except Exception:
+                pass
+
+        parts = [status]
+        if progress is not None:
+            try:
+                parts.append(f"{float(progress):.0f}%")
+            except (TypeError, ValueError):
+                pass
+        eta = _humanize_eta(eta_seconds)
+        if eta:
+            parts.append(f"ETA {eta}")
+        lines.append(f"• {label} — {' · '.join(parts)}")
+    return "\n".join(lines)
+
+
 def download_telegram_file(file_id: str) -> bytes:
     """Download a file from Telegram by file_id. Returns raw bytes."""
     r = requests.get(f"{TG_BASE}/getFile", params={"file_id": file_id}, timeout=15)
@@ -200,7 +262,8 @@ def process_message(msg: dict, chat_id: str):
                 title, quality = text[len("/movie "):].strip(), "1080p"
             try:
                 result = media_client.add_movie(title=title, quality=quality)
-                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+                _track_media_request("movie", title, quality, result)
+                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll ping you when it's ready — or run /downloads to check.")
             except Exception as e:
                 send_telegram(chat_id, f"Failed to add '{title}': {e}")
             return
@@ -217,9 +280,14 @@ def process_message(msg: dict, chat_id: str):
             quality = m.group("quality") or "1080p"
             try:
                 result = media_client.add_tv(title=title, season=season, quality=quality)
-                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+                _track_media_request("tv", title, quality, result, season=season)
+                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll ping you when it's ready — or run /downloads to check.")
             except Exception as e:
                 send_telegram(chat_id, f"Failed to add '{title}': {e}")
+            return
+
+        if text == "/downloads" or text.startswith("/downloads "):
+            send_telegram(chat_id, _format_downloads_summary())
             return
 
         logger.info(f"Message from MJ: {text[:100]}")

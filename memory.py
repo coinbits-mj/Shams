@@ -1383,3 +1383,79 @@ def get_backfill_cursor(account_key: str) -> str | None:
 
 def set_backfill_cursor(account_key: str, page_token: str) -> None:
     remember(f"email_mining_backfill_cursor_{account_key}", page_token)
+
+
+# ── Media Downloads ────────────────────────────────────────────────────────
+
+_MEDIA_TERMINAL_STATUSES = {"downloaded", "ready", "completed", "imported", "failed", "canceled"}
+
+
+def record_media_download(
+    media_type: str,
+    title: str,
+    bridge_id: str | None = None,
+    year: int | None = None,
+    season: int | None = None,
+    quality: str | None = None,
+    status: str = "requested",
+) -> int:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"INSERT INTO {P}media_downloads "
+            f"(bridge_id, media_type, title, year, season, quality, status) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (bridge_id, media_type, title, year, season, quality, status),
+        )
+        return cur.fetchone()[0]
+
+
+def update_media_download(
+    download_id: int,
+    status: str | None = None,
+    progress_pct: float | None = None,
+    eta_seconds: int | None = None,
+    notified_ready: bool | None = None,
+):
+    fields, values = [], []
+    if status is not None:
+        fields.append("status = %s")
+        values.append(status)
+        if status.lower() in _MEDIA_TERMINAL_STATUSES:
+            fields.append("completed_at = NOW()")
+    if progress_pct is not None:
+        fields.append("progress_pct = %s")
+        values.append(progress_pct)
+    if eta_seconds is not None:
+        fields.append("eta_seconds = %s")
+        values.append(eta_seconds)
+    if notified_ready is not None:
+        fields.append("notified_ready = %s")
+        values.append(notified_ready)
+    fields.append("last_checked_at = NOW()")
+    values.append(download_id)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"UPDATE {P}media_downloads SET {', '.join(fields)} WHERE id = %s",
+            tuple(values),
+        )
+
+
+def get_active_media_downloads() -> list[dict]:
+    """Returns downloads that haven't reached a terminal status."""
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}media_downloads "
+            f"WHERE LOWER(status) NOT IN %s "
+            f"ORDER BY requested_at DESC",
+            (tuple(_MEDIA_TERMINAL_STATUSES),),
+        )
+        return list(cur.fetchall())
+
+
+def get_recent_media_downloads(limit: int = 20) -> list[dict]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(
+            f"SELECT * FROM {P}media_downloads ORDER BY requested_at DESC LIMIT %s",
+            (limit,),
+        )
+        return list(cur.fetchall())
