@@ -70,5 +70,20 @@ EVENING_HOUR_UTC = int(os.environ.get("EVENING_HOUR_UTC", "1"))     # 8pm ET
 OVERNIGHT_HOUR_UTC = int(os.environ.get("OVERNIGHT_HOUR_UTC", "7"))  # 3am ET
 STANDUP_HOUR_UTC = int(os.environ.get("STANDUP_HOUR_UTC", "11"))     # 7am ET
 
+# Recall.ai (Meeting Bot)
+RECALL_API_KEY = os.environ.get("RECALL_API_KEY", "")
+RECALL_REGION = os.environ.get("RECALL_REGION", "us-east-1")
+RECALL_WEBHOOK_SECRET = os.environ.get("RECALL_WEBHOOK_SECRET", "")
+RECALL_BASE_URL = f"https://{RECALL_REGION}.recall.ai/api/v1"
+
+MEETING_BOT_NAME = os.environ.get("MEETING_BOT_NAME", "Shams Notetaker")
+MEETING_BOT_MAX_DAILY = int(os.environ.get("MEETING_BOT_MAX_DAILY", "10"))
+MEETING_MAX_DURATION_HOURS = int(os.environ.get("MEETING_MAX_DURATION_HOURS", "3"))
+MEETING_EXCLUDE_PATTERNS = os.environ.get(
+    "MEETING_EXCLUDE_PATTERNS",
+    "lunch,dentist,personal,block,focus time,gym,doctor,dinner"
+).lower().split(",")
+MEETING_BOT_DISABLED = os.environ.get("MEETING_BOT_DISABLED", "").lower() in ("1", "true", "yes")
+
 # Flask
 FLASK_PORT = int(os.environ.get("PORT", "8081"))
