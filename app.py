@@ -78,6 +78,66 @@ def telegram_webhook():
     return jsonify({"ok": True})
 
 
+# ── Recall.ai webhook ──────────────────────────────────────────────────────
+
+@app.route("/api/recall/webhook", methods=["POST"])
+def recall_webhook():
+    """Handle Recall.ai bot status change webhooks."""
+    import meeting_bot
+    import recall_client as rc
+
+    data = request.get_json(silent=True) or {}
+    event_type = data.get("event") or data.get("type", "")
+    bot_data = data.get("data", {}).get("bot") or data.get("data", {})
+    bot_id = bot_data.get("id") or data.get("bot_id", "")
+    status = bot_data.get("status_code") or data.get("status", "")
+
+    logger.info(f"Recall webhook: event={event_type} bot={bot_id} status={status}")
+
+    if status == "done" and bot_id:
+        # Async: process in background to respond to webhook quickly
+        import threading
+        threading.Thread(
+            target=_process_recall_bot,
+            args=(bot_id,),
+            daemon=True,
+        ).start()
+
+    return jsonify({"ok": True}), 200
+
+
+def _process_recall_bot(bot_id: str):
+    """Background handler: pull transcript, process, deliver."""
+    import meeting_bot
+    import recall_client as rc
+    import json
+
+    try:
+        # Get event metadata from memory
+        meta_raw = memory.recall(f"recall_bot_{bot_id}")
+        if not meta_raw:
+            logger.error(f"No event meta found for bot {bot_id}")
+            return
+        event_meta = json.loads(meta_raw)
+
+        # Get transcript
+        utterances = rc.get_transcript(bot_id)
+        transcript_text = rc.format_transcript(utterances)
+
+        if not transcript_text or len(transcript_text) < 50:
+            logger.warning(f"Transcript too short for bot {bot_id}, skipping")
+            return
+
+        # Process
+        meeting_bot.process_completed_meeting(
+            bot_id=bot_id,
+            transcript_text=transcript_text,
+            event_meta=event_meta,
+        )
+    except Exception as e:
+        logger.error(f"process_recall_bot error: {e}", exc_info=True)
+
+
 # ── Chat HTTP ────────────────────────────────────────────────────────────────
 
 @app.route("/chat", methods=["POST"])

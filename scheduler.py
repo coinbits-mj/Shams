@@ -407,6 +407,55 @@ def _check_meeting_preps():
         logger.error(f"Meeting prep check error: {e}")
 
 
+def _check_meeting_bots():
+    """Poll for both: (1) upcoming meetings to dispatch bots, (2) completed bots to process."""
+    try:
+        from meeting_bot import check_and_dispatch_bots
+        dispatched = check_and_dispatch_bots()
+        if dispatched:
+            logger.info(f"Meeting bot: dispatched {dispatched} bot(s)")
+    except Exception as e:
+        logger.error(f"Meeting bot dispatch error: {e}")
+
+    # Fallback poller: check for any bots that finished but webhook was missed
+    try:
+        import recall_client as rc
+        import meeting_bot
+        import json
+
+        # Get all active bot IDs from memory (recall_bot_* keys)
+        from config import DATABASE_URL
+        import psycopg2
+        with psycopg2.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, value FROM shams_memory WHERE key LIKE 'recall_bot_%'")
+                active_bots = cur.fetchall()
+
+        for key, meta_raw in active_bots:
+            bot_id = key.replace("recall_bot_", "")
+            # Skip if already processed
+            with psycopg2.connect(DATABASE_URL) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1 FROM shams_meeting_notes WHERE recall_bot_id = %s", (bot_id,))
+                    if cur.fetchone():
+                        continue
+
+            bot = rc.get_bot(bot_id)
+            if bot and bot.get("status_code") == "done":
+                logger.info(f"Fallback poller: processing completed bot {bot_id}")
+                utterances = rc.get_transcript(bot_id)
+                transcript_text = rc.format_transcript(utterances)
+                if transcript_text and len(transcript_text) >= 50:
+                    event_meta = json.loads(meta_raw)
+                    meeting_bot.process_completed_meeting(
+                        bot_id=bot_id,
+                        transcript_text=transcript_text,
+                        event_meta=event_meta,
+                    )
+    except Exception as e:
+        logger.error(f"Meeting bot fallback poller error: {e}")
+
+
 # ── Scheduler init ──────────────────────────────────────────────────────────
 
 def init_scheduler():
@@ -425,9 +474,10 @@ def init_scheduler():
     scheduler.add_job(send_weekly_pl_digest, "cron", day_of_week="sun", hour=1, minute=0, id="weekly_pl")
     scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")
     scheduler.add_job(_check_meeting_preps, "interval", minutes=10, id="meeting_prep_check")
+    scheduler.add_job(_check_meeting_bots, "interval", minutes=10, id="meeting_bot_check")
     scheduler.start()
     logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
-    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min)")
+    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min), meeting bots (10min)")
 
     # Load dynamic tasks from database
     _load_dynamic_tasks()
