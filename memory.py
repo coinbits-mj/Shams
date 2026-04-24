@@ -1383,3 +1383,68 @@ def get_backfill_cursor(account_key: str) -> str | None:
 
 def set_backfill_cursor(account_key: str, page_token: str) -> None:
     remember(f"email_mining_backfill_cursor_{account_key}", page_token)
+
+
+# ── Meeting notes helpers ────────────────────────────────────────────────────
+
+def insert_meeting_notes(data: dict) -> int | None:
+    """Insert a meeting notes row. Returns the row id."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO shams_meeting_notes
+                (event_id, recall_bot_id, title, started_at, ended_at,
+                 duration_min, attendees, platform, transcript, summary,
+                 action_items, decisions, commitments_created, commitments_resolved,
+                 persona_used, meeting_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (recall_bot_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                data.get("event_id"),
+                data.get("recall_bot_id"),
+                data.get("title"),
+                data.get("started_at"),
+                data.get("ended_at"),
+                data.get("duration_min"),
+                json.dumps(data.get("attendees") or []),
+                data.get("platform"),
+                data.get("transcript"),
+                data.get("summary"),
+                json.dumps(data.get("action_items") or []),
+                json.dumps(data.get("decisions") or []),
+                data.get("commitments_created") or [],
+                data.get("commitments_resolved") or [],
+                data.get("persona_used"),
+                data.get("meeting_type"),
+            ),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def search_meeting_notes(query: str = "", attendee: str = "", meeting_type: str = "",
+                         since: str = "", limit: int = 10) -> list[dict]:
+    """Search meeting notes. Returns list of dicts."""
+    sql = ["SELECT id, title, started_at, duration_min, meeting_type, summary, action_items FROM shams_meeting_notes WHERE 1=1"]
+    params = []
+    if query:
+        sql.append("AND (summary ILIKE %s OR transcript ILIKE %s)")
+        params.extend([f"%{query}%", f"%{query}%"])
+    if attendee:
+        sql.append("AND attendees::text ILIKE %s")
+        params.append(f"%{attendee}%")
+    if meeting_type:
+        sql.append("AND meeting_type = %s")
+        params.append(meeting_type)
+    if since:
+        sql.append("AND started_at >= %s")
+        params.append(since)
+    sql.append("ORDER BY started_at DESC LIMIT %s")
+    params.append(limit)
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(" ".join(sql), params)
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
