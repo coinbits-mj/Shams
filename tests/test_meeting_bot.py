@@ -199,3 +199,85 @@ class TestSmartFilter:
         }
         url = meeting_bot.extract_meeting_url(event)
         assert url and "zoom.us" in url
+
+
+class TestMeetingTypeDetection:
+    def test_detects_legal_meeting(self):
+        import meeting_bot
+        attendees = [{"email": "counsel@sewkis.com", "name": "Miller"}]
+        assert meeting_bot.detect_meeting_type("FRE 408 Discussion", attendees) == "legal"
+
+    def test_detects_standup(self):
+        import meeting_bot
+        attendees = [{"email": "brandon@qcitycoffee.com"}]
+        assert meeting_bot.detect_meeting_type("Daily Stand-Up", attendees) == "operations"
+
+    def test_detects_deal_meeting(self):
+        import meeting_bot
+        attendees = [{"email": "richard@rhrcoffee.com"}]
+        assert meeting_bot.detect_meeting_type("NDA Review + LOI", attendees) == "deal"
+
+    def test_detects_interview(self):
+        import meeting_bot
+        attendees = [{"email": "annie@gmail.com"}]
+        assert meeting_bot.detect_meeting_type("Annie — Barista Interview", attendees) == "interview"
+
+    def test_defaults_to_general(self):
+        import meeting_bot
+        attendees = [{"email": "someone@company.com"}]
+        assert meeting_bot.detect_meeting_type("Quick sync", attendees) == "general"
+
+
+class TestProcessTranscript:
+    def test_process_builds_summary_and_stores(self, monkeypatch):
+        import meeting_bot
+
+        # Mock the LLM call
+        def fake_create(**kwargs):
+            class Content:
+                text = json.dumps({
+                    "summary": "Discussed Q2 targets. Brandon will follow up on vendor pricing.",
+                    "action_items": [{"assignee": "Brandon", "task": "Follow up on vendor pricing", "deadline": None}],
+                    "decisions": [{"decision": "Push Q2 launch to May", "context": "Waiting on vendor"}],
+                    "commitments_made": [{"to": "Brandon", "text": "send the pricing sheet", "deadline": "Friday"}],
+                    "commitments_resolved": [],
+                })
+            class Resp:
+                content = [Content()]
+            return Resp()
+
+        monkeypatch.setattr("anthropic.Anthropic", lambda **kw: type("C", (), {"messages": type("M", (), {"create": staticmethod(fake_create)})()})())
+
+        # Mock DB + delivery
+        stored = {}
+        monkeypatch.setattr("memory.insert_meeting_notes", lambda data: stored.update(data) or 1)
+        monkeypatch.setattr("telegram.send_message", lambda text, **kw: None)
+
+        # Mock _gather_cross_references to avoid DB calls
+        monkeypatch.setattr(meeting_bot, "_gather_cross_references", lambda emails: {"emails": {}, "commitments": [], "missions": []})
+
+        # Mock commitments.persist_commitments to avoid DB calls
+        import commitments as commitments_mod
+        monkeypatch.setattr(commitments_mod, "persist_commitments", lambda **kw: 1)
+
+        # Mock _send_email_summary to avoid needing resend
+        monkeypatch.setattr(meeting_bot, "_send_email_summary", lambda notes: None)
+
+        # Mock _send_telegram_summary to avoid DB calls inside it
+        monkeypatch.setattr(meeting_bot, "_send_telegram_summary", lambda notes: None)
+
+        result = meeting_bot.process_completed_meeting(
+            bot_id="bot-123",
+            transcript_text="Brandon: Let's push to May.\nMaher: Agreed. I'll send the pricing sheet by Friday.",
+            event_meta={
+                "event_id": "evt-1",
+                "title": "Weekly Ops",
+                "start": "2026-04-24T14:00:00Z",
+                "end": "2026-04-24T14:30:00Z",
+                "attendees": [{"email": "brandon@qcitycoffee.com", "name": "Brandon"}],
+                "platform": "google_meet",
+            },
+        )
+        assert result is not None
+        assert stored.get("summary")
+        assert len(stored.get("action_items", [])) == 1
