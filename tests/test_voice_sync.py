@@ -41,6 +41,7 @@ class TestSession:
         assert s["mode"] == "active"
         assert s["history"] == []
         assert s["pending_words"] == []
+        assert s["pending_partial"] == ""
 
         again = voice_sync.get_session("bot-1")
         assert again is s
@@ -78,21 +79,22 @@ class TestSession:
 
 class TestTurnDetection:
     def test_buffer_partial_words(self, monkeypatch):
+        """Partials populate pending_partial (rolling) — NOT pending_words (final segments)."""
         import voice_sync
         voice_sync._SESSIONS.clear()
         voice_sync.create_session("bot-t1")
 
-        # Frozen "now" so the test isn't time-flaky.
         now = {"t": 100.0}
         monkeypatch.setattr(voice_sync.time, "monotonic", lambda: now["t"])
 
         voice_sync.buffer_words("bot-t1", "hey", is_final=False)
         now["t"] += 0.2
-        voice_sync.buffer_words("bot-t1", "shams", is_final=False)
+        voice_sync.buffer_words("bot-t1", "hey shams", is_final=False)  # cumulative partial
 
         s = voice_sync.get_session("bot-t1")
-        assert s["pending_words"] == ["hey", "shams"]
-        assert voice_sync.is_turn_complete("bot-t1") is False
+        assert s["pending_words"] == []           # finals: none yet
+        assert s["pending_partial"] == "hey shams"  # latest rolling partial
+        assert voice_sync.is_turn_complete("bot-t1") is False  # silence too short
 
     def test_turn_complete_after_silence(self, monkeypatch):
         import voice_sync, config
@@ -126,6 +128,37 @@ class TestTurnDetection:
         voice_sync.create_session("bot-t4")
         monkeypatch.setattr(voice_sync.time, "monotonic", lambda: 0.0)
         assert voice_sync.is_turn_complete("bot-t4") is False
+
+    def test_partials_then_final_uses_only_final_text(self, monkeypatch):
+        """Recall partial events are CUMULATIVE — buffering each would duplicate."""
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-pf")
+
+        now = {"t": 1000.0}
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: now["t"])
+
+        # Three rolling partials + one final, mimicking Deepgram behavior
+        voice_sync.buffer_words("bot-pf", "what's", is_final=False)
+        voice_sync.buffer_words("bot-pf", "what's on", is_final=False)
+        voice_sync.buffer_words("bot-pf", "what's on my calendar", is_final=False)
+        voice_sync.buffer_words("bot-pf", "what's on my calendar today", is_final=True)
+
+        text = voice_sync.drain_pending("bot-pf")
+        # Only the final's text should appear, no concatenation of partials
+        assert text == "what's on my calendar today"
+
+    def test_partial_only_drain_falls_back_to_partial_text(self, monkeypatch):
+        """If MJ pauses mid-sentence (no final received), drain still gives best-effort text."""
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-pp")
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: 50.0)
+
+        voice_sync.buffer_words("bot-pp", "hey shams", is_final=False)
+        voice_sync.buffer_words("bot-pp", "hey shams what's", is_final=False)
+        text = voice_sync.drain_pending("bot-pp")
+        assert text == "hey shams what's"
 
 
 class TestLiveContext:
@@ -394,7 +427,9 @@ class TestWebhookGlue:
 
         voice_sync.handle_realtime_event(self._payload("bot-w1", "hey there", is_final=False))
 
-        assert voice_sync.get_session("bot-w1")["pending_words"] == ["hey there"]
+        s = voice_sync.get_session("bot-w1")
+        assert s["pending_words"] == []
+        assert s["pending_partial"] == "hey there"
         assert spoken == []
 
     def test_full_turn_triggers_claude_then_speak(self, monkeypatch):
@@ -468,6 +503,24 @@ class TestWebhookGlue:
             "data": {"bot": {"id": "bot-w5"}, "data": {"words": [], "participant": {"name": "Maher"}, "is_final": True}},
         })
         assert called["n"] == 0
+
+    def test_skips_processing_while_speaking(self, monkeypatch):
+        """Echo guard: while session.speaking is True, ignore incoming events."""
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        s = voice_sync.create_session("bot-w-echo")
+        s["speaking"] = True
+
+        called = {"buffer": 0, "claude": 0, "speak": 0}
+        monkeypatch.setattr(voice_sync, "buffer_words",
+            lambda *a, **kw: called.__setitem__("buffer", called["buffer"]+1))
+        monkeypatch.setattr(voice_sync, "process_user_turn",
+            lambda *a, **kw: called.__setitem__("claude", called["claude"]+1))
+        monkeypatch.setattr(voice_sync, "speak",
+            lambda *a, **kw: called.__setitem__("speak", called["speak"]+1) or True)
+
+        voice_sync.handle_realtime_event(self._payload("bot-w-echo", "echo from tts", is_final=True))
+        assert called == {"buffer": 0, "claude": 0, "speak": 0}
 
 
 class TestRealtimeEndpoint:

@@ -46,7 +46,8 @@ def create_session(bot_id: str) -> dict:
         s = {
             "bot_id": bot_id,
             "history": [],            # [{role, content}]
-            "pending_words": [],      # buffered partial words during current MJ utterance
+            "pending_words": [],      # buffered FINAL utterance segments waiting to drain
+            "pending_partial": "",    # latest CUMULATIVE partial text (Deepgram rolls this)
             "last_word_at": 0.0,      # monotonic seconds — for pause detection
             "mode": "active",         # "active" | "passive" (just listen)
             "context_cache": {},      # {calendar, commitments, mentions, ...} — populated by build_live_context (Task 7)
@@ -89,10 +90,16 @@ def set_mode(bot_id: str, mode: str) -> None:
 
 
 def buffer_words(bot_id: str, text: str, is_final: bool) -> None:
-    """Buffer transcript words/phrases during MJ's utterance.
+    """Buffer transcript chunks during MJ's utterance.
 
-    Recall's transcript.data events deliver chunks (final or partial). We append
-    every chunk's text and update last_word_at so pause detection works.
+    Recall's `transcript.partial_data` events deliver CUMULATIVE rolling text
+    (each partial contains all prior text), so we cannot just append every
+    chunk — we'd duplicate. Strategy:
+    - Always update `last_word_at` so pause detection sees activity.
+    - Track the latest cumulative partial in s["pending_partial"].
+    - Only commit to `pending_words` on a final event; the committed text is
+      the final's `text` (which Recall guarantees contains the complete
+      utterance segment).
     """
     s = _SESSIONS.get(bot_id)
     if s is None:
@@ -100,26 +107,41 @@ def buffer_words(bot_id: str, text: str, is_final: bool) -> None:
     text = text.strip()
     if not text:
         return
-    s["pending_words"].append(text)
+
     s["last_word_at"] = time.monotonic()
+
+    if is_final:
+        # Commit the final text and clear the partial buffer.
+        s["pending_words"].append(text)
+        s["pending_partial"] = ""
+    else:
+        # Replace the rolling partial — DO NOT append.
+        s["pending_partial"] = text
 
 
 def is_turn_complete(bot_id: str) -> bool:
     """True if MJ has paused long enough to count as end-of-turn."""
     s = _SESSIONS.get(bot_id)
-    if s is None or not s["pending_words"]:
+    if s is None:
+        return False
+    if not s["pending_words"] and not s.get("pending_partial"):
         return False
     silence = time.monotonic() - s["last_word_at"]
     return silence >= config.SYNC_PAUSE_SECONDS
 
 
 def drain_pending(bot_id: str) -> str:
-    """Pop pending words as a single utterance string and clear the buffer."""
+    """Pop pending words + any unfinalized partial; clear the buffer."""
     s = _SESSIONS.get(bot_id)
     if s is None:
         return ""
-    text = " ".join(s["pending_words"]).strip()
+    parts = list(s["pending_words"])
+    partial = s.get("pending_partial", "")
+    if partial:
+        parts.append(partial)
+    text = " ".join(parts).strip()
     s["pending_words"] = []
+    s["pending_partial"] = ""
     return text
 
 
@@ -446,10 +468,15 @@ _MJ_SPEAKER_TOKENS = ("maher", "mj", "janajri")
 
 
 def _is_mj_speaker(name: str | None) -> bool:
+    """True iff the participant name matches one of the known MJ tokens.
+
+    Default-False when speaker info is missing — once MJ adds a teammate to
+    the call, treating unidentified events as MJ would let other voices drive
+    Shams's turns. Recall almost always populates participant.name once
+    diarization warms up.
+    """
     if not name:
-        # Default to True when speaker info is missing — better to over-respond
-        # than miss MJ. Adjust if we see false positives in practice.
-        return True
+        return False
     low = name.lower()
     return any(tok in low for tok in _MJ_SPEAKER_TOKENS)
 
@@ -469,6 +496,11 @@ def handle_realtime_event(payload: dict) -> None:
 
     s = _SESSIONS.get(bot_id)
     if s is None:
+        return
+    # Echo guard: while Shams's TTS is playing into the meeting, ignore
+    # transcripts — Recall will pick up our own audio and we don't want to
+    # respond to ourselves.
+    if s.get("speaking"):
         return
 
     inner = data_outer.get("data", {}) or {}
