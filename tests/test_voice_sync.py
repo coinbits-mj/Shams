@@ -579,3 +579,49 @@ class TestSmartPing:
         # Disable
         monkeypatch.setattr(config, "SYNC_DISABLED", True)
         assert voice_sync.should_ping(now=now) is False
+
+
+class TestDispatchSyncBot:
+    def test_dispatch_creates_bot_with_realtime_and_session(self, monkeypatch):
+        import voice_sync, config
+        voice_sync._SESSIONS.clear()
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "https://meet.google.com/abc")
+        monkeypatch.setattr(config, "APP_REALTIME_WEBHOOK_URL", "https://app.myshams.ai/api/recall/realtime", raising=False)
+
+        captured = {}
+
+        def fake_create_bot(**kwargs):
+            captured.update(kwargs)
+            return {"id": "bot-sync-1"}
+
+        monkeypatch.setattr(voice_sync, "_create_bot", fake_create_bot)
+        monkeypatch.setattr(voice_sync, "_remember", lambda k, v: None)
+
+        bot_id = voice_sync.dispatch_sync_bot()
+
+        assert bot_id == "bot-sync-1"
+        assert captured["meeting_url"] == "https://meet.google.com/abc"
+        assert "/api/recall/realtime" in captured["realtime_webhook_url"]
+        assert captured["bot_name"] == config.SYNC_BOT_NAME
+        # Session is created
+        assert voice_sync.get_session("bot-sync-1") is not None
+
+    def test_dispatch_returns_none_when_meet_url_missing(self, monkeypatch):
+        import voice_sync, config
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "")
+        assert voice_sync.dispatch_sync_bot() is None
+
+    def test_dispatch_persists_sync_bot_marker(self, monkeypatch):
+        """The post-call pipeline uses this marker to route through Shams persona."""
+        import voice_sync, config
+        voice_sync._SESSIONS.clear()
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "https://meet.google.com/abc")
+        monkeypatch.setattr(voice_sync, "_create_bot", lambda **kw: {"id": "bot-sync-2"})
+
+        remembered = {}
+        monkeypatch.setattr(voice_sync, "_remember", lambda k, v: remembered.__setitem__(k, v))
+
+        voice_sync.dispatch_sync_bot()
+        # Should set both: legacy meeting_bot key for transcript fetch + sync marker
+        assert "recall_bot_bot-sync-2" in remembered
+        assert "sync_bot_bot-sync-2" in remembered

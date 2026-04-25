@@ -13,6 +13,7 @@ Sections:
 from __future__ import annotations
 
 import functools
+import json
 import logging
 import os
 import re
@@ -542,3 +543,63 @@ def should_ping(now=None) -> bool:
     if not _next_30min_free(now):
         return False
     return True
+
+
+# ── Bot dispatch ────────────────────────────────────────────────────────────
+
+
+def _create_bot(**kwargs):
+    """Indirection for monkeypatching."""
+    import recall_client
+    return recall_client.create_bot(**kwargs)
+
+
+def _remember(key: str, value: str) -> None:
+    """Indirection for monkeypatching."""
+    memory.remember(key, value)
+
+
+def _realtime_webhook_url() -> str:
+    """The public URL Recall posts realtime events to."""
+    base = os.environ.get("APP_URL", "https://app.myshams.ai").rstrip("/")
+    return f"{base}/api/recall/realtime"
+
+
+def dispatch_sync_bot() -> str | None:
+    """Send the bot to the persistent sync Meet. Creates session state.
+
+    Returns the bot_id on success.
+    """
+    if not config.SYNC_MEET_URL:
+        logger.error("SYNC_MEET_URL not set")
+        return None
+
+    bot = _create_bot(
+        meeting_url=config.SYNC_MEET_URL,
+        bot_name=config.SYNC_BOT_NAME,
+        realtime_webhook_url=_realtime_webhook_url(),
+        transcript_provider=config.SYNC_REALTIME_TRANSCRIPT_PROVIDER,
+    )
+    if not bot or not bot.get("id"):
+        return None
+
+    bot_id = bot["id"]
+    create_session(bot_id)
+
+    # Mark as a sync bot so post-call routing knows the persona/type
+    _remember(f"sync_bot_{bot_id}", "1")
+    # Reuse the meeting_bot key so the existing transcript-fetcher path works
+    _remember(
+        f"recall_bot_{bot_id}",
+        json.dumps({
+            "event_id": f"sync_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}",
+            "title": "Shams Sync",
+            "start": datetime.now(timezone.utc).isoformat(),
+            "end": "",
+            "attendees": [],
+            "platform": "google_meet",
+            "meeting_type": "daily_sync",
+            "persona": "shams",
+        }),
+    )
+    return bot_id
