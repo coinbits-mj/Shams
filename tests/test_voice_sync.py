@@ -516,3 +516,66 @@ class TestRealtimeEndpoint:
         r = client.post("/api/recall/realtime", json={"event": "x", "data": {}})
         # Recall retries 4xx/5xx — we always 200 to drain the queue
         assert r.status_code == 200
+
+
+class TestSmartPing:
+    def test_in_window_default_9_to_11_et(self, monkeypatch):
+        import voice_sync
+        from datetime import datetime, timezone
+
+        # 13:30 UTC = 9:30 ET (during DST). Adjust per SYNC_WINDOW_*_UTC default 13–15.
+        assert voice_sync._in_window(datetime(2026, 4, 25, 13, 30, tzinfo=timezone.utc)) is True
+        assert voice_sync._in_window(datetime(2026, 4, 25, 12, 30, tzinfo=timezone.utc)) is False
+        assert voice_sync._in_window(datetime(2026, 4, 25, 15, 30, tzinfo=timezone.utc)) is False
+
+    def test_skip_weekends_when_enabled(self, monkeypatch):
+        import voice_sync, config
+        from datetime import datetime, timezone
+        monkeypatch.setattr(config, "SYNC_SKIP_WEEKENDS", True)
+        # 2026-04-25 is a Saturday
+        assert voice_sync._is_weekend(datetime(2026, 4, 25, 14, 0, tzinfo=timezone.utc)) is True
+        # 2026-04-27 is a Monday
+        assert voice_sync._is_weekend(datetime(2026, 4, 27, 14, 0, tzinfo=timezone.utc)) is False
+
+    def test_pinged_today_flag_blocks_repeat(self, monkeypatch):
+        import voice_sync
+        memory_calls = {}
+        monkeypatch.setattr(voice_sync, "_recall", lambda key: "1" if key.startswith("sync_pinged_") else None)
+        assert voice_sync._already_pinged_today("2026-04-25") is True
+        monkeypatch.setattr(voice_sync, "_recall", lambda key: None)
+        assert voice_sync._already_pinged_today("2026-04-25") is False
+
+    def test_calendar_block_free_no_event_in_30min(self, monkeypatch):
+        import voice_sync
+        from datetime import datetime, timezone, timedelta
+
+        now = datetime(2026, 4, 27, 14, 0, tzinfo=timezone.utc)
+
+        # Event starts in 45 min → block free
+        monkeypatch.setattr(voice_sync, "_get_remaining_today", lambda: [
+            {"summary": "Brandon", "start": (now + timedelta(minutes=45)).isoformat()}
+        ])
+        assert voice_sync._next_30min_free(now) is True
+
+        # Event starts in 20 min → block NOT free
+        monkeypatch.setattr(voice_sync, "_get_remaining_today", lambda: [
+            {"summary": "Brandon", "start": (now + timedelta(minutes=20)).isoformat()}
+        ])
+        assert voice_sync._next_30min_free(now) is False
+
+    def test_should_ping_combines_all_conditions(self, monkeypatch):
+        import voice_sync, config
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 4, 27, 14, 0, tzinfo=timezone.utc)  # Mon 10am ET, in window
+
+        monkeypatch.setattr(config, "SYNC_DISABLED", False)
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "https://meet.google.com/xyz")
+        monkeypatch.setattr(voice_sync, "_already_pinged_today", lambda d: False)
+        monkeypatch.setattr(voice_sync, "_next_30min_free", lambda n: True)
+
+        assert voice_sync.should_ping(now=now) is True
+
+        # Disable
+        monkeypatch.setattr(config, "SYNC_DISABLED", True)
+        assert voice_sync.should_ping(now=now) is False

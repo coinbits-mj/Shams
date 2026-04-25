@@ -18,11 +18,12 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import config
 import db
+import memory
 
 logger = logging.getLogger(__name__)
 
@@ -491,3 +492,53 @@ def handle_realtime_event(payload: dict) -> None:
     reply = process_user_turn(bot_id, utterance)
     if reply:
         speak(bot_id, reply)
+
+
+# ── Smart ping ──────────────────────────────────────────────────────────────
+
+
+def _recall(key: str) -> str | None:
+    """Indirection for monkeypatching memory.recall in tests."""
+    return memory.recall(key)
+
+
+def _in_window(now) -> bool:
+    return config.SYNC_WINDOW_START_UTC <= now.hour < config.SYNC_WINDOW_END_UTC
+
+
+def _is_weekend(now) -> bool:
+    return now.weekday() >= 5  # Sat=5, Sun=6
+
+
+def _already_pinged_today(date_str: str) -> bool:
+    return bool(_recall(f"sync_pinged_{date_str}"))
+
+
+def _next_30min_free(now) -> bool:
+    for ev in _get_remaining_today():
+        try:
+            start_dt = datetime.fromisoformat(ev["start"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        delta = (start_dt - now).total_seconds() / 60
+        if 0 <= delta <= 30:
+            return False
+    return True
+
+
+def should_ping(now=None) -> bool:
+    """Evaluate all conditions for sending a sync ping."""
+    if config.SYNC_DISABLED:
+        return False
+    if not config.SYNC_MEET_URL:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if not _in_window(now):
+        return False
+    if config.SYNC_SKIP_WEEKENDS and _is_weekend(now):
+        return False
+    if _already_pinged_today(now.strftime("%Y-%m-%d")):
+        return False
+    if not _next_30min_free(now):
+        return False
+    return True
