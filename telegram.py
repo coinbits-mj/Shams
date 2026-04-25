@@ -538,6 +538,22 @@ def handle_callback(callback):
     cb_id = callback["id"]
     chat_id = str(callback["message"]["chat"]["id"])
 
+    # Sync callbacks (sync_skip:DATE, sync_join) — handled before the
+    # integer-id parsing block since their suffix is a date string.
+    if cb_data.startswith("sync_"):
+        try:
+            import voice_sync
+            voice_sync.handle_sync_callback(cb_data)
+        except Exception as e:
+            logger.error(f"Sync callback error: {e}")
+        try:
+            requests.post(f"{TG_BASE}/answerCallbackQuery", json={
+                "callback_query_id": cb_id, "text": "ok",
+            }, timeout=10)
+        except Exception:
+            pass
+        return
+
     parts = cb_data.split(":")
     if len(parts) != 2:
         return

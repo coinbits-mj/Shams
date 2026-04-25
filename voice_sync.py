@@ -603,3 +603,75 @@ def dispatch_sync_bot() -> str | None:
         }),
     )
     return bot_id
+
+
+# ── Telegram ping ───────────────────────────────────────────────────────────
+
+
+def _send_telegram_with_buttons(chat_id: str, text: str, buttons: list) -> None:
+    """Indirection — Telegram's helper expects a list of dicts on one row.
+
+    For sync we want two distinct rows so the deeplink (URL) and callback_data
+    button render cleanly.
+    """
+    import requests
+    from telegram import TG_BASE
+    if not TG_BASE:
+        return
+    keyboard = {"inline_keyboard": [[b] for b in buttons]}
+    try:
+        requests.post(
+            f"{TG_BASE}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "reply_markup": keyboard},
+            timeout=15,
+        )
+    except Exception as e:
+        logger.error(f"Sync ping send failed: {e}")
+
+
+def send_sync_ping() -> None:
+    """Send the inline-button Telegram ping."""
+    if not config.SYNC_MEET_URL:
+        return
+    chat_id = config.TELEGRAM_CHAT_ID
+    if not chat_id:
+        return
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    text = "☀️ Got a clear window — want to sync?"
+    buttons = [
+        {"text": "Join Sync ☕", "url": config.SYNC_MEET_URL},
+        {"text": "Not today", "callback_data": f"sync_skip:{today}"},
+    ]
+    _send_telegram_with_buttons(chat_id, text, buttons)
+    # Mark pinged so we don't re-ping today even before MJ acts
+    _remember(f"sync_pinged_{today}", "sent")
+
+
+def handle_sync_callback(cb_data: str) -> None:
+    """Handle Telegram callback for sync_* buttons."""
+    if not cb_data:
+        return
+    parts = cb_data.split(":", 1)
+    action = parts[0]
+    arg = parts[1] if len(parts) > 1 else ""
+
+    if action == "sync_skip":
+        date_str = arg or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        _remember(f"sync_pinged_{date_str}", "skipped")
+        # Mark "Not today" so we don't ping again
+        return
+
+    if action == "sync_join":
+        # Manual dispatch path (in case we ever wire a callback button to it)
+        dispatch_sync_bot()
+        return
+
+
+def smart_sync_ping_check() -> None:
+    """Scheduler entrypoint — every 15 min during the window."""
+    try:
+        if should_ping():
+            send_sync_ping()
+    except Exception as e:
+        logger.error(f"smart_sync_ping_check error: {e}")

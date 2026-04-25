@@ -625,3 +625,48 @@ class TestDispatchSyncBot:
         # Should set both: legacy meeting_bot key for transcript fetch + sync marker
         assert "recall_bot_bot-sync-2" in remembered
         assert "sync_bot_bot-sync-2" in remembered
+
+
+class TestTelegramPing:
+    def test_send_sync_ping_sends_two_buttons(self, monkeypatch):
+        import voice_sync, config
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "https://meet.google.com/abc")
+
+        captured = {}
+        def fake_send(chat_id, text, buttons):
+            captured["text"] = text
+            captured["buttons"] = buttons
+        monkeypatch.setattr(voice_sync, "_send_telegram_with_buttons", fake_send)
+        monkeypatch.setattr(voice_sync, "_remember", lambda k, v: None)
+
+        voice_sync.send_sync_ping()
+
+        assert "sync" in captured["text"].lower()
+        labels = [b["text"] for b in captured["buttons"]]
+        assert any("join" in l.lower() for l in labels)
+        assert any("not today" in l.lower() for l in labels)
+        # The "join" button uses url (deeplink); "not today" uses callback_data
+        join = next(b for b in captured["buttons"] if "join" in b["text"].lower())
+        assert join.get("url") == "https://meet.google.com/abc"
+        skip = next(b for b in captured["buttons"] if "not today" in b["text"].lower())
+        assert skip.get("callback_data", "").startswith("sync_skip:")
+
+    def test_handle_sync_skip_sets_pinged_flag(self, monkeypatch):
+        import voice_sync
+        remembered = {}
+        monkeypatch.setattr(voice_sync, "_remember", lambda k, v: remembered.__setitem__(k, v))
+        voice_sync.handle_sync_callback("sync_skip:2026-04-27")
+        assert remembered.get("sync_pinged_2026-04-27") == "skipped"
+
+    def test_smart_ping_check_only_pings_when_should_ping(self, monkeypatch):
+        import voice_sync
+        sent = {"n": 0}
+        monkeypatch.setattr(voice_sync, "send_sync_ping", lambda: sent.__setitem__("n", sent["n"]+1))
+
+        monkeypatch.setattr(voice_sync, "should_ping", lambda now=None: False)
+        voice_sync.smart_sync_ping_check()
+        assert sent["n"] == 0
+
+        monkeypatch.setattr(voice_sync, "should_ping", lambda now=None: True)
+        voice_sync.smart_sync_ping_check()
+        assert sent["n"] == 1
