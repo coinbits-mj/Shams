@@ -421,7 +421,10 @@ RULES:
 - Match his energy: casual when he's casual, sharp when he's focused.
 - If he says "just listen" — go quiet.
 
-You have tools available — search_email, create_draft, calendar lookups, mercury balances, commitments, etc. Use them when MJ asks for something requiring data or action. After a tool call, deliver the answer in one tight sentence; don't recap what you searched.
+You have tools available — search_email, create_draft, calendar lookups, mercury balances, commitments, etc. Use them when MJ asks for something requiring data or action.
+
+CRITICAL — fill the silence: any time you call a tool, FIRST emit a single short text sentence like "One sec, checking" or "Looking that up" or "Pulling that now" BEFORE the tool_use block. This is non-negotiable — without it MJ hears dead air for several seconds. After the tool returns, deliver the answer in one tight sentence; don't recap what you searched.
+
 When MJ asks you to "draft a reply" or "send an email", call create_draft and confirm out loud: "Drafted, check your inbox" — never read the full body aloud.
 """
 
@@ -527,6 +530,19 @@ def process_user_turn(bot_id: str, utterance: str) -> str | None:
                     text_parts.append(getattr(b, "text", "") or "")
             final_text = " ".join(p for p in text_parts if p).strip()
             break
+
+        # Speak any interim text from this turn BEFORE running the tools — this
+        # is the "give me a sec" cushion that fills the dead air while tools run.
+        interim_parts = []
+        for b in resp.content:
+            btype = getattr(b, "type", None)
+            if btype == "text" or (btype is None and hasattr(b, "text")):
+                interim_parts.append(getattr(b, "text", "") or "")
+        interim_text = " ".join(p for p in interim_parts if p).strip()
+        if interim_text:
+            interim_text = _truncate_to_sentences(interim_text, max_sentences=1)
+            append_assistant_turn(bot_id, interim_text)
+            speak(bot_id, interim_text)
 
         # Tool-use loop: execute every tool the model asked for, then loop.
         tool_results = []
