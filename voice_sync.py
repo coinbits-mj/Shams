@@ -420,6 +420,9 @@ RULES:
 - Don't say "as an AI" — you're his chief of staff.
 - Match his energy: casual when he's casual, sharp when he's focused.
 - If he says "just listen" — go quiet.
+
+You have tools available — search_email, create_draft, calendar lookups, mercury balances, commitments, etc. Use them when MJ asks for something requiring data or action. After a tool call, deliver the answer in one tight sentence; don't recap what you searched.
+When MJ asks you to "draft a reply" or "send an email", call create_draft and confirm out loud: "Drafted, check your inbox" — never read the full body aloud.
 """
 
 _SYNC_MODEL = os.environ.get("SYNC_CLAUDE_MODEL", "claude-haiku-4-5")
@@ -473,28 +476,88 @@ def process_user_turn(bot_id: str, utterance: str) -> str | None:
     if ctx_text:
         system = system + "\n\nLIVE CONTEXT:\n" + ctx_text
 
-    # TODO: prompt caching — split system into a static persona block (cached)
-    # and a per-turn LIVE CONTEXT block (uncached) using
-    # `system=[{"type":"text","text":_SYSTEM_PROMPT,"cache_control":{"type":"ephemeral"}},
-    #          {"type":"text","text":"LIVE CONTEXT:\n"+ctx_text}]`.
-    # Saves ~50-100ms TTFT and ~90% of the persona token cost on Haiku.
-    # Defer until after Task 10 (webhook handler) ships.
+    # Lazy-load tool registry — first call discovers, later calls are cached.
+    tool_defs: list[dict] = []
+    tool_execute = None
     try:
-        api = _anthropic_client()
-        resp = api.messages.create(
-            model=_SYNC_MODEL,
-            max_tokens=300,
-            system=system,
-            messages=list(s["history"]),
-        )
-        text = resp.content[0].text.strip()
+        from tools import registry as tools_registry
+        if not tools_registry.get_tools():
+            tools_registry.discover_tools()
+        tool_defs = tools_registry.get_tool_definitions()
+        tool_execute = tools_registry.execute
     except Exception:
-        logger.exception("Voice sync Claude turn error")
-        return None
+        logger.exception("voice_sync tool registry load failed; falling back to no-tools")
 
-    text = _truncate_to_sentences(text)
-    append_assistant_turn(bot_id, text)
-    return text
+    api = _anthropic_client()
+    messages = list(s["history"])
+    final_text: str | None = None
+    max_iters = 4
+
+    for _ in range(max_iters):
+        try:
+            kwargs = dict(
+                model=_SYNC_MODEL,
+                max_tokens=600,
+                system=system,
+                messages=messages,
+            )
+            if tool_defs:
+                kwargs["tools"] = tool_defs
+            resp = api.messages.create(**kwargs)
+        except Exception:
+            logger.exception("Voice sync Claude turn error")
+            return None
+
+        stop = getattr(resp, "stop_reason", "end_turn")
+        if stop == "end_turn" or stop is None:
+            text_parts = []
+            for b in resp.content:
+                btype = getattr(b, "type", None)
+                if btype == "text" or (btype is None and hasattr(b, "text")):
+                    text_parts.append(getattr(b, "text", "") or "")
+            final_text = " ".join(p for p in text_parts if p).strip()
+            break
+
+        if stop != "tool_use":
+            # Unexpected stop reason (max_tokens, refusal, etc.) — take the text we have and bail.
+            text_parts = []
+            for b in resp.content:
+                btype = getattr(b, "type", None)
+                if btype == "text" or (btype is None and hasattr(b, "text")):
+                    text_parts.append(getattr(b, "text", "") or "")
+            final_text = " ".join(p for p in text_parts if p).strip()
+            break
+
+        # Tool-use loop: execute every tool the model asked for, then loop.
+        tool_results = []
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                logger.info(f"voice_sync tool_use bot={bot_id} tool={block.name}")
+                if tool_execute is None:
+                    result = {"error": "tools unavailable"}
+                else:
+                    result = tool_execute(block.name, block.input or {})
+                if not isinstance(result, str):
+                    try:
+                        result = json.dumps(result, default=str)
+                    except Exception:
+                        result = str(result)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        if not tool_results:
+            break
+        messages.append({"role": "assistant", "content": resp.content})
+        messages.append({"role": "user", "content": tool_results})
+
+    if not final_text:
+        return None
+    final_text = _truncate_to_sentences(final_text)
+    append_assistant_turn(bot_id, final_text)
+    return final_text
 
 
 # ── Speak ───────────────────────────────────────────────────────────────────
