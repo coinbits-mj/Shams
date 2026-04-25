@@ -170,3 +170,23 @@ class TestLiveContext:
         assert "Brandon" in text
         assert "50" in text  # days_old
         assert len(text) < 1500  # Live conversations want short context
+
+    def test_format_context_empty_returns_empty(self):
+        import voice_sync
+        assert voice_sync.format_context_for_prompt({}) == ""
+        assert voice_sync.format_context_for_prompt({
+            "calendar_today": [],
+            "overdue_commitments": [],
+            "mentioned_emails": {},
+        }) == ""
+
+    def test_extract_filters_voice_filler_and_verbs(self):
+        import voice_sync
+        names = voice_sync.extract_mentioned_names(
+            "how are you doing today, going to talk to brandon about the deal"
+        )
+        # Brandon comes through; common voice filler does NOT
+        lower = [n.lower() for n in names]
+        assert "brandon" in lower
+        for noise in ("you", "doing", "today", "going", "talk", "about", "the", "deal"):
+            assert noise not in lower, f"{noise!r} leaked through stopwords"

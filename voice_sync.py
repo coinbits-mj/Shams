@@ -123,13 +123,49 @@ def drain_pending(bot_id: str) -> str:
 
 # Common words that look like names but aren't
 _NAME_STOPWORDS = {
-    "i", "i'll", "i've", "i'm", "the", "and", "but", "or", "if", "to", "for",
-    "with", "from", "of", "on", "in", "at", "is", "was", "are", "were", "be",
-    "have", "has", "had", "do", "does", "did", "will", "would", "should",
-    "could", "what", "when", "where", "who", "why", "how", "tell", "let",
-    "send", "today", "tomorrow", "yesterday", "monday", "tuesday", "wednesday",
-    "thursday", "friday", "saturday", "sunday", "yeah", "yes", "no", "ok",
-    "okay", "shams",
+    # pronouns + articles + conjunctions
+    "i", "i'll", "i've", "i'm", "you", "your", "yours", "we", "us", "our",
+    "they", "them", "their", "he", "she", "him", "her", "his", "hers",
+    "it", "its", "the", "and", "but", "or", "if", "to", "for", "with",
+    "from", "of", "on", "in", "at", "as", "by", "about",
+    # be/have/do/will family
+    "is", "was", "are", "were", "be", "been", "being",
+    "have", "has", "had", "having",
+    "do", "does", "did", "doing", "done",
+    "will", "would", "should", "could", "can", "may", "might", "must",
+    # wh/question + common verbs
+    "what", "when", "where", "who", "why", "how", "which",
+    "tell", "let", "send", "see", "saw", "look", "looking", "make",
+    "made", "take", "took", "come", "came", "going", "gone", "go",
+    "get", "got", "say", "said", "saying", "talk", "talked", "talking",
+    "think", "thinking", "know", "knew", "want", "wanted", "need",
+    "needed", "ask", "asked", "asking", "meet", "meeting", "give",
+    "gave", "given", "put", "use", "used", "using", "try", "tried",
+    "trying", "feel", "felt", "show", "showed", "find", "found",
+    "work", "working",
+    # time/day words
+    "today", "tomorrow", "yesterday",
+    "monday", "tuesday", "wednesday", "thursday", "friday",
+    "saturday", "sunday",
+    "morning", "afternoon", "evening", "night", "now", "then", "soon",
+    "later", "earlier", "week", "weeks", "month", "months", "year",
+    "years", "day", "days", "hour", "hours", "minute", "minutes",
+    "time", "times",
+    # affirmation/negation/social
+    "yeah", "yes", "no", "ok", "okay", "sure", "fine", "nope", "yep",
+    "thanks", "thank", "please", "hi", "hello", "hey", "bye", "goodbye",
+    "right", "wrong", "good", "great", "bad", "really", "very",
+    "much", "many", "more", "most", "less", "least",
+    # filler/discourse
+    "uh", "um", "like", "just", "kind", "kinda", "sort", "sorta",
+    "actually", "basically", "literally", "honestly", "anyway", "well",
+    "still", "even", "also", "only", "maybe", "probably", "always",
+    "never", "ever", "again", "back", "here", "there",
+    # demonstratives + generic nouns
+    "this", "that", "these", "those", "thing", "things", "stuff",
+    "deal", "deals", "way", "ways", "part", "parts", "side",
+    # bot itself
+    "shams",
 }
 
 _NAME_RE = re.compile(r"[A-Za-z][A-Za-z'\-]+")
@@ -162,8 +198,8 @@ def _get_remaining_today() -> list[dict]:
     try:
         import google_client
         events = google_client.get_todays_events()
-    except Exception as e:
-        logger.error(f"Live context calendar error: {e}")
+    except Exception:
+        logger.exception("Live context calendar error")
         return []
 
     now = datetime.now(timezone.utc)
@@ -193,34 +229,50 @@ def _get_overdue_commitments() -> list[dict]:
                 {"to": r[0], "text": r[1], "days_old": r[2] or 0}
                 for r in cur.fetchall()
             ]
-    except Exception as e:
-        logger.error(f"Live context commitments error: {e}")
+    except Exception:
+        logger.exception("Live context commitments error")
         return []
 
 
 def _get_recent_emails_for_names(names: list[str]) -> dict[str, list[dict]]:
-    """For each mentioned name, return up to 3 recent emails (last 30d)."""
+    """For each mentioned name, return up to 3 recent emails (last 30d).
+
+    Best-effort: a per-name SQL error is logged and skipped; the rest of the
+    names are still attempted.
+    """
     if not names:
         return {}
     out: dict[str, list[dict]] = {}
     try:
-        with db.get_conn() as conn, conn.cursor() as cur:
+        conn = db.get_conn()
+    except Exception:
+        logger.exception("Live context emails: db.get_conn failed")
+        return out
+    try:
+        with conn:
             for name in names[:5]:
-                cur.execute(
-                    """SELECT from_addr, subject, date FROM shams_email_archive
-                       WHERE (from_addr ILIKE %s OR subject ILIKE %s)
-                         AND date > NOW() - INTERVAL '30 days'
-                       ORDER BY date DESC LIMIT 3""",
-                    (f"%{name}%", f"%{name}%"),
-                )
-                rows = cur.fetchall()
-                if rows:
-                    out[name.lower()] = [
-                        {"from": r[0], "subject": r[1], "date": str(r[2])[:10]}
-                        for r in rows
-                    ]
-    except Exception as e:
-        logger.error(f"Live context emails error: {e}")
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """SELECT from_addr, subject, date FROM shams_email_archive
+                               WHERE (from_addr ILIKE %s OR subject ~* %s)
+                                 AND date > NOW() - INTERVAL '30 days'
+                               ORDER BY date DESC LIMIT 3""",
+                            (f"%{name}%", rf"\m{name}\M"),
+                        )
+                        rows = cur.fetchall()
+                        if rows:
+                            out[name.lower()] = [
+                                {"from": r[0], "subject": r[1], "date": str(r[2])[:10]}
+                                for r in rows
+                            ]
+                except Exception:
+                    logger.exception(f"Live context emails: lookup failed for name={name!r}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     return out
 
 
