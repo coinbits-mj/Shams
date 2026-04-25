@@ -144,6 +144,7 @@ class TestRecallClient:
         assert endpoints[0]["type"] == "webhook"
         assert endpoints[0]["url"] == "https://app.myshams.ai/api/recall/realtime"
         assert "transcript.data" in endpoints[0]["events"]
+        assert "transcript.partial_data" in endpoints[0]["events"]
 
     def test_create_bot_default_provider_unchanged(self, monkeypatch):
         """Existing meeting-bot callers (no realtime_webhook_url) keep meeting_captions."""

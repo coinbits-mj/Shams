@@ -33,8 +33,8 @@ def create_bot(
 
     If realtime_webhook_url is set, configures a streaming transcript provider
     (defaults to deepgram_streaming) and a realtime_endpoints webhook for
-    transcript.data events. Otherwise uses meeting_captions like the legacy
-    meeting bot.
+    transcript.data and transcript.partial_data events. Otherwise uses
+    meeting_captions like the legacy meeting bot.
 
     Returns the bot dict (with 'id' key) on success, None on failure.
     """
