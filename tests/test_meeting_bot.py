@@ -118,6 +118,54 @@ class TestRecallClient:
         monkeypatch.setattr("requests.post", lambda *a, **kw: R())
         assert recall_client.output_audio("bot-xyz", b"data") is False
 
+    def test_create_bot_with_realtime_webhook(self, monkeypatch):
+        import recall_client
+
+        captured = {}
+        def fake_post(url, **kwargs):
+            captured["json"] = kwargs.get("json", {})
+            class R:
+                ok = True
+                status_code = 201
+                def json(self):
+                    return {"id": "bot-rt"}
+            return R()
+
+        monkeypatch.setattr("requests.post", fake_post)
+        recall_client.create_bot(
+            "https://meet.google.com/abc",
+            realtime_webhook_url="https://app.myshams.ai/api/recall/realtime",
+            transcript_provider="deepgram_streaming",
+        )
+
+        cfg = captured["json"]["recording_config"]
+        assert cfg["transcript"]["provider"] == {"deepgram_streaming": {}}
+        endpoints = cfg["realtime_endpoints"]
+        assert endpoints[0]["type"] == "webhook"
+        assert endpoints[0]["url"] == "https://app.myshams.ai/api/recall/realtime"
+        assert "transcript.data" in endpoints[0]["events"]
+
+    def test_create_bot_default_provider_unchanged(self, monkeypatch):
+        """Existing meeting-bot callers (no realtime_webhook_url) keep meeting_captions."""
+        import recall_client
+
+        captured = {}
+        def fake_post(url, **kwargs):
+            captured["json"] = kwargs.get("json", {})
+            class R:
+                ok = True
+                status_code = 201
+                def json(self):
+                    return {"id": "bot-mc"}
+            return R()
+
+        monkeypatch.setattr("requests.post", fake_post)
+        recall_client.create_bot("https://meet.google.com/abc")
+
+        cfg = captured["json"]["recording_config"]
+        assert cfg["transcript"]["provider"] == {"meeting_captions": {}}
+        assert "realtime_endpoints" not in cfg
+
 
 class TestSmartFilter:
     def test_passes_normal_meeting(self):

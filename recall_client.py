@@ -26,19 +26,39 @@ def create_bot(
     meeting_url: str,
     bot_name: str | None = None,
     join_at: str | None = None,
+    realtime_webhook_url: str | None = None,
+    transcript_provider: str | None = None,
 ) -> dict | None:
     """Create a Recall.ai bot to join a meeting.
 
+    If realtime_webhook_url is set, configures a streaming transcript provider
+    (defaults to deepgram_streaming) and a realtime_endpoints webhook for
+    transcript.data events. Otherwise uses meeting_captions like the legacy
+    meeting bot.
+
     Returns the bot dict (with 'id' key) on success, None on failure.
     """
+    if realtime_webhook_url:
+        provider = transcript_provider or "deepgram_streaming"
+        recording_config = {
+            "transcript": {"provider": {provider: {}}},
+            "realtime_endpoints": [
+                {
+                    "type": "webhook",
+                    "url": realtime_webhook_url,
+                    "events": ["transcript.data", "transcript.partial_data"],
+                }
+            ],
+        }
+    else:
+        recording_config = {
+            "transcript": {"provider": {"meeting_captions": {}}},
+        }
+
     body = {
         "meeting_url": meeting_url,
         "bot_name": bot_name or config.MEETING_BOT_NAME,
-        "recording_config": {
-            "transcript": {
-                "provider": {"meeting_captions": {}},
-            },
-        },
+        "recording_config": recording_config,
     }
     if join_at:
         body["join_at"] = join_at
