@@ -488,6 +488,23 @@ def handle_realtime_event(payload: dict) -> None:
     (in-progress) events. We append every chunk's words and check pause-based
     completion after each one.
     """
+    # TEMP DEBUG: log compact payload shape so we can see what's arriving
+    try:
+        evt = payload.get("event")
+        d = payload.get("data", {}) or {}
+        bid = (d.get("bot", {}) or {}).get("id")
+        inner = d.get("data", {}) or {}
+        words = inner.get("words", []) or []
+        text_preview = " ".join(w.get("text", "") for w in words)[:80]
+        is_final = inner.get("is_final")
+        speaker = (inner.get("participant") or {}).get("name")
+        logger.info(
+            f"realtime evt={evt!r} bot={bid} speaker={speaker!r} is_final={is_final} "
+            f"words={len(words)} text={text_preview!r} session_exists={bid in _SESSIONS}"
+        )
+    except Exception:
+        logger.exception("realtime debug log failed")
+
     data_outer = payload.get("data", {}) or {}
     bot = data_outer.get("bot", {}) or {}
     bot_id = bot.get("id") or data_outer.get("bot_id", "")
