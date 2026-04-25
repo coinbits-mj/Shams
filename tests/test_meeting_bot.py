@@ -84,6 +84,40 @@ class TestRecallClient:
         assert len(result) == 2
         assert result[0]["speaker"] == "Brandon"
 
+    def test_output_audio_posts_b64_mp3(self, monkeypatch):
+        import recall_client
+
+        captured = {}
+        def fake_post(url, **kwargs):
+            captured["url"] = url
+            captured["json"] = kwargs.get("json", {})
+            class R:
+                ok = True
+                status_code = 200
+                def json(self):
+                    return {"ok": True}
+            return R()
+
+        monkeypatch.setattr("requests.post", fake_post)
+        ok = recall_client.output_audio("bot-xyz", b"\xff\xfbFAKEMP3")
+        assert ok is True
+        assert "/bot/bot-xyz/output_audio/" in captured["url"]
+        assert captured["json"]["kind"] == "mp3"
+        # b64 of bytes — must be a string, not bytes
+        assert isinstance(captured["json"]["b64_data"], str)
+        assert len(captured["json"]["b64_data"]) > 0
+
+    def test_output_audio_returns_false_on_failure(self, monkeypatch):
+        import recall_client
+
+        class R:
+            ok = False
+            status_code = 500
+            text = "boom"
+
+        monkeypatch.setattr("requests.post", lambda *a, **kw: R())
+        assert recall_client.output_audio("bot-xyz", b"data") is False
+
 
 class TestSmartFilter:
     def test_passes_normal_meeting(self):

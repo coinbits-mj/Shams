@@ -1,6 +1,7 @@
 """Recall.ai API client — create bots, check status, retrieve transcripts."""
 from __future__ import annotations
 
+import base64
 import logging
 
 import requests
@@ -191,6 +192,32 @@ def _get_or_create_async_transcript(recording_id: str) -> list[dict]:
 
     logger.warning(f"Async transcript timed out for recording {recording_id}")
     return []
+
+
+def output_audio(bot_id: str, mp3_bytes: bytes) -> bool:
+    """Send mp3 audio to a live bot to play in the meeting.
+
+    Returns True on success, False otherwise.
+    """
+    body = {
+        "kind": "mp3",
+        "b64_data": base64.b64encode(mp3_bytes).decode("ascii"),
+    }
+    try:
+        r = requests.post(
+            _url(f"/bot/{bot_id}/output_audio/"),
+            json=body,
+            headers=_headers(),
+            timeout=30,
+        )
+    except Exception as e:
+        logger.error(f"Recall output_audio error: {e}")
+        return False
+
+    if not r.ok:
+        logger.error(f"Recall output_audio failed {r.status_code}: {r.text[:200]}")
+        return False
+    return True
 
 
 def format_transcript(utterances: list[dict]) -> str:
