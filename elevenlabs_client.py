@@ -75,5 +75,6 @@ def list_voices() -> list[dict]:
         logger.error(f"ElevenLabs list_voices error: {e}")
         return []
     if not r.ok:
+        logger.error(f"ElevenLabs list_voices failed {r.status_code}: {r.text[:200]}")
         return []
     return r.json().get("voices", [])

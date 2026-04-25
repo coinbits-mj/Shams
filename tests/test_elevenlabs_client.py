@@ -81,3 +81,44 @@ class TestElevenLabsTTS:
         voices = elevenlabs_client.list_voices()
         assert len(voices) == 2
         assert voices[0]["voice_id"] == "v1"
+
+    def test_tts_payload_includes_voice_settings(self, monkeypatch):
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "fake")
+        import importlib, config, elevenlabs_client
+        importlib.reload(config); importlib.reload(elevenlabs_client)
+
+        captured = {}
+
+        class R:
+            ok = True
+            status_code = 200
+            content = b"\xff\xfbX"
+
+        def fake_post(url, **kwargs):
+            captured["json"] = kwargs.get("json", {})
+            return R()
+
+        monkeypatch.setattr("requests.post", fake_post)
+        elevenlabs_client.tts("hi", voice_id="V")
+
+        vs = captured["json"]["voice_settings"]
+        assert vs["stability"] == 0.5
+        assert vs["similarity_boost"] == 0.75
+        assert vs["style"] == 0.0
+        assert vs["use_speaker_boost"] is True
+
+    def test_tts_returns_none_when_voice_id_missing(self, monkeypatch):
+        monkeypatch.setenv("ELEVENLABS_API_KEY", "fake")
+        monkeypatch.delenv("ELEVENLABS_VOICE_ID", raising=False)
+        import importlib, config, elevenlabs_client
+        importlib.reload(config); importlib.reload(elevenlabs_client)
+
+        called = {"n": 0}
+        def fake_post(*a, **kw):
+            called["n"] += 1
+            raise AssertionError("should not be called")
+        monkeypatch.setattr("requests.post", fake_post)
+
+        # No voice_id arg, no env default -> should short-circuit to None
+        assert elevenlabs_client.tts("hi") is None
+        assert called["n"] == 0
