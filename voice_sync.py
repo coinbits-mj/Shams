@@ -13,11 +13,14 @@ Sections:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import config
+import db
 
 logger = logging.getLogger(__name__)
 
@@ -114,3 +117,140 @@ def drain_pending(bot_id: str) -> str:
     text = " ".join(s["pending_words"]).strip()
     s["pending_words"] = []
     return text
+
+
+# ── Live context ────────────────────────────────────────────────────────────
+
+# Common words that look like names but aren't
+_NAME_STOPWORDS = {
+    "i", "i'll", "i've", "i'm", "the", "and", "but", "or", "if", "to", "for",
+    "with", "from", "of", "on", "in", "at", "is", "was", "are", "were", "be",
+    "have", "has", "had", "do", "does", "did", "will", "would", "should",
+    "could", "what", "when", "where", "who", "why", "how", "tell", "let",
+    "send", "today", "tomorrow", "yesterday", "monday", "tuesday", "wednesday",
+    "thursday", "friday", "saturday", "sunday", "yeah", "yes", "no", "ok",
+    "okay", "shams",
+}
+
+_NAME_RE = re.compile(r"[A-Za-z][A-Za-z'\-]+")
+
+
+def extract_mentioned_names(utterance: str) -> list[str]:
+    """Heuristic: words capitalized in the source OR in a known-people list.
+
+    Voice transcripts are often lowercase, so we accept any token that's not in
+    the stopword list and is at least 3 chars. The downstream lookup filters
+    junk by checking against the email archive's known senders.
+    """
+    if not utterance:
+        return []
+    out = []
+    seen = set()
+    for tok in _NAME_RE.findall(utterance):
+        low = tok.lower()
+        if low in _NAME_STOPWORDS or len(low) < 3:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(tok)
+    return out
+
+
+def _get_remaining_today() -> list[dict]:
+    """Calendar events from now until end of day."""
+    try:
+        import google_client
+        events = google_client.get_todays_events()
+    except Exception as e:
+        logger.error(f"Live context calendar error: {e}")
+        return []
+
+    now = datetime.now(timezone.utc)
+    out = []
+    for ev in events:
+        start_raw = ev.get("start", "")
+        try:
+            start_dt = datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if start_dt >= now:
+            out.append({"summary": ev.get("summary", ""), "start": start_raw})
+    return out[:5]
+
+
+def _get_overdue_commitments() -> list[dict]:
+    try:
+        with db.get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT recipient_email, commitment_text,
+                          EXTRACT(DAY FROM (NOW() - promised_at))::INT AS days_old
+                   FROM shams_open_commitments
+                   WHERE status = 'open'
+                   ORDER BY promised_at ASC LIMIT 5"""
+            )
+            return [
+                {"to": r[0], "text": r[1], "days_old": r[2] or 0}
+                for r in cur.fetchall()
+            ]
+    except Exception as e:
+        logger.error(f"Live context commitments error: {e}")
+        return []
+
+
+def _get_recent_emails_for_names(names: list[str]) -> dict[str, list[dict]]:
+    """For each mentioned name, return up to 3 recent emails (last 30d)."""
+    if not names:
+        return {}
+    out: dict[str, list[dict]] = {}
+    try:
+        with db.get_conn() as conn, conn.cursor() as cur:
+            for name in names[:5]:
+                cur.execute(
+                    """SELECT from_addr, subject, date FROM shams_email_archive
+                       WHERE (from_addr ILIKE %s OR subject ILIKE %s)
+                         AND date > NOW() - INTERVAL '30 days'
+                       ORDER BY date DESC LIMIT 3""",
+                    (f"%{name}%", f"%{name}%"),
+                )
+                rows = cur.fetchall()
+                if rows:
+                    out[name.lower()] = [
+                        {"from": r[0], "subject": r[1], "date": str(r[2])[:10]}
+                        for r in rows
+                    ]
+    except Exception as e:
+        logger.error(f"Live context emails error: {e}")
+    return out
+
+
+def build_live_context(utterance: str) -> dict:
+    """Assemble the live context bundle for one Claude turn."""
+    names = extract_mentioned_names(utterance)
+    return {
+        "calendar_today": _get_remaining_today(),
+        "overdue_commitments": _get_overdue_commitments(),
+        "mentioned_emails": _get_recent_emails_for_names(names),
+    }
+
+
+def format_context_for_prompt(ctx: dict) -> str:
+    """Compact text block injected into Claude's system message for the turn."""
+    lines = []
+    cal = ctx.get("calendar_today", [])
+    if cal:
+        lines.append("CALENDAR (remaining today):")
+        for ev in cal:
+            lines.append(f"- {ev.get('summary', '')} @ {ev.get('start', '')[:16]}")
+    coms = ctx.get("overdue_commitments", [])
+    if coms:
+        lines.append("\nOVERDUE COMMITMENTS:")
+        for c in coms:
+            lines.append(f"- to {c.get('to', '?')}: \"{c.get('text', '')[:80]}\" ({c.get('days_old', 0)}d old)")
+    mentions = ctx.get("mentioned_emails", {})
+    if mentions:
+        lines.append("\nRECENT EMAILS FOR PEOPLE MENTIONED:")
+        for name, emails in mentions.items():
+            for e in emails[:2]:
+                lines.append(f"- {name}: {e.get('subject', '')} ({e.get('date', '')})")
+    return "\n".join(lines)

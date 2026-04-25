@@ -126,3 +126,47 @@ class TestTurnDetection:
         voice_sync.create_session("bot-t4")
         monkeypatch.setattr(voice_sync.time, "monotonic", lambda: 0.0)
         assert voice_sync.is_turn_complete("bot-t4") is False
+
+
+class TestLiveContext:
+    def test_extract_mentioned_first_names(self):
+        import voice_sync
+        names = voice_sync.extract_mentioned_names(
+            "tell brandon and Adam I'll send the LOI to richard tomorrow"
+        )
+        assert "brandon" in [n.lower() for n in names]
+        assert "adam" in [n.lower() for n in names]
+        assert "richard" in [n.lower() for n in names]
+        # Stopwords filtered
+        assert "i'll" not in [n.lower() for n in names]
+        assert "the" not in [n.lower() for n in names]
+
+    def test_build_live_context_pulls_calendar_and_commitments(self, monkeypatch):
+        import voice_sync
+
+        monkeypatch.setattr(voice_sync, "_get_remaining_today", lambda: [
+            {"summary": "Brandon", "start": "2026-04-25T18:00:00Z"},
+        ])
+        monkeypatch.setattr(voice_sync, "_get_overdue_commitments", lambda: [
+            {"to": "richard@x.com", "text": "send LOI", "days_old": 50},
+        ])
+        monkeypatch.setattr(voice_sync, "_get_recent_emails_for_names", lambda names: {
+            "brandon": [{"from": "brandon@qcc", "subject": "Tomorrow"}],
+        })
+
+        ctx = voice_sync.build_live_context(utterance="anything from brandon?")
+        assert "Brandon" in ctx["calendar_today"][0]["summary"]
+        assert ctx["overdue_commitments"][0]["days_old"] == 50
+        assert "brandon" in ctx["mentioned_emails"]
+
+    def test_format_context_for_prompt_is_concise(self, monkeypatch):
+        import voice_sync
+        ctx = {
+            "calendar_today": [{"summary": "Brandon", "start": "2026-04-25T18:00:00Z"}],
+            "overdue_commitments": [{"to": "richard@x.com", "text": "send LOI", "days_old": 50}],
+            "mentioned_emails": {},
+        }
+        text = voice_sync.format_context_for_prompt(ctx)
+        assert "Brandon" in text
+        assert "50" in text  # days_old
+        assert len(text) < 1500  # Live conversations want short context
