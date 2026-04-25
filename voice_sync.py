@@ -17,6 +17,8 @@ import threading
 import time
 from typing import Any
 
+import config
+
 logger = logging.getLogger(__name__)
 
 # ── Session state ───────────────────────────────────────────────────────────
@@ -74,3 +76,41 @@ def set_mode(bot_id: str, mode: str) -> None:
     s = _SESSIONS.get(bot_id)
     if s is not None and mode in ("active", "passive"):
         s["mode"] = mode
+
+
+# ── Turn detection ──────────────────────────────────────────────────────────
+
+
+def buffer_words(bot_id: str, text: str, is_final: bool) -> None:
+    """Buffer transcript words/phrases during MJ's utterance.
+
+    Recall's transcript.data events deliver chunks (final or partial). We append
+    every chunk's text and update last_word_at so pause detection works.
+    """
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return
+    text = text.strip()
+    if not text:
+        return
+    s["pending_words"].append(text)
+    s["last_word_at"] = time.monotonic()
+
+
+def is_turn_complete(bot_id: str) -> bool:
+    """True if MJ has paused long enough to count as end-of-turn."""
+    s = _SESSIONS.get(bot_id)
+    if s is None or not s["pending_words"]:
+        return False
+    silence = time.monotonic() - s["last_word_at"]
+    return silence >= config.SYNC_PAUSE_SECONDS
+
+
+def drain_pending(bot_id: str) -> str:
+    """Pop pending words as a single utterance string and clear the buffer."""
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return ""
+    text = " ".join(s["pending_words"]).strip()
+    s["pending_words"] = []
+    return text

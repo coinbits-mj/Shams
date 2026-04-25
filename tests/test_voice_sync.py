@@ -74,3 +74,55 @@ class TestSession:
         voice_sync.create_session("bot-4")
         voice_sync.set_mode("bot-4", "passive")
         assert voice_sync.get_session("bot-4")["mode"] == "passive"
+
+
+class TestTurnDetection:
+    def test_buffer_partial_words(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-t1")
+
+        # Frozen "now" so the test isn't time-flaky.
+        now = {"t": 100.0}
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: now["t"])
+
+        voice_sync.buffer_words("bot-t1", "hey", is_final=False)
+        now["t"] += 0.2
+        voice_sync.buffer_words("bot-t1", "shams", is_final=False)
+
+        s = voice_sync.get_session("bot-t1")
+        assert s["pending_words"] == ["hey", "shams"]
+        assert voice_sync.is_turn_complete("bot-t1") is False
+
+    def test_turn_complete_after_silence(self, monkeypatch):
+        import voice_sync, config
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-t2")
+
+        now = {"t": 200.0}
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: now["t"])
+
+        voice_sync.buffer_words("bot-t2", "what's", is_final=True)
+        voice_sync.buffer_words("bot-t2", "next", is_final=True)
+        # Advance just past the configured pause threshold
+        now["t"] += config.SYNC_PAUSE_SECONDS + 0.1
+        assert voice_sync.is_turn_complete("bot-t2") is True
+
+    def test_drain_pending_returns_text_and_clears(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-t3")
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: 50.0)
+
+        voice_sync.buffer_words("bot-t3", "hello", is_final=True)
+        voice_sync.buffer_words("bot-t3", "there", is_final=True)
+        text = voice_sync.drain_pending("bot-t3")
+        assert text == "hello there"
+        assert voice_sync.get_session("bot-t3")["pending_words"] == []
+
+    def test_is_turn_complete_false_when_no_words(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-t4")
+        monkeypatch.setattr(voice_sync.time, "monotonic", lambda: 0.0)
+        assert voice_sync.is_turn_complete("bot-t4") is False
