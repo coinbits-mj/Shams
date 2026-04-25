@@ -399,3 +399,37 @@ def process_user_turn(bot_id: str, utterance: str) -> str | None:
     text = _truncate_to_sentences(text)
     append_assistant_turn(bot_id, text)
     return text
+
+
+# ── Speak ───────────────────────────────────────────────────────────────────
+
+
+def _tts(text: str, voice_id: str | None = None) -> bytes | None:
+    """Wrapper for elevenlabs_client.tts so it's monkeypatchable in tests."""
+    import elevenlabs_client
+    return elevenlabs_client.tts(text, voice_id=voice_id)
+
+
+def _output_audio(bot_id: str, mp3_bytes: bytes) -> bool:
+    """Wrapper for recall_client.output_audio so it's monkeypatchable in tests."""
+    import recall_client
+    return recall_client.output_audio(bot_id, mp3_bytes)
+
+
+def speak(bot_id: str, text: str) -> bool:
+    """TTS the text and play it through the bot. Returns True on success."""
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return False
+
+    s["speaking"] = True
+    try:
+        mp3 = _tts(text)
+        if not mp3:
+            logger.warning(f"TTS returned no audio for bot {bot_id}; skipping output")
+            return False
+        if not _output_audio(bot_id, mp3):
+            return False
+        return True
+    finally:
+        s["speaking"] = False

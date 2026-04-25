@@ -310,3 +310,59 @@ class TestClaudeTurn:
 
         # Question to a teammate, NOT addressed to Shams
         assert voice_sync.process_user_turn("bot-c4", "do you have that report ready?") is None
+
+
+class TestSpeak:
+    def test_speak_calls_tts_then_output_audio(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-s1")
+
+        captured = {"tts_text": None, "audio_bot": None, "audio_bytes": None}
+
+        def fake_tts(text, voice_id=None):
+            captured["tts_text"] = text
+            return b"\xff\xfbMP3"
+
+        def fake_output_audio(bot_id, mp3_bytes):
+            captured["audio_bot"] = bot_id
+            captured["audio_bytes"] = mp3_bytes
+            return True
+
+        monkeypatch.setattr(voice_sync, "_tts", fake_tts)
+        monkeypatch.setattr(voice_sync, "_output_audio", fake_output_audio)
+
+        ok = voice_sync.speak("bot-s1", "hello mj")
+        assert ok is True
+        assert captured["tts_text"] == "hello mj"
+        assert captured["audio_bot"] == "bot-s1"
+        assert captured["audio_bytes"] == b"\xff\xfbMP3"
+
+    def test_speak_returns_false_when_tts_fails(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-s2")
+
+        monkeypatch.setattr(voice_sync, "_tts", lambda text, voice_id=None: None)
+        monkeypatch.setattr(voice_sync, "_output_audio", lambda *a, **kw: True)
+
+        assert voice_sync.speak("bot-s2", "hi") is False
+
+    def test_speak_marks_session_speaking_then_clears(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-s3")
+
+        seen_speaking = []
+
+        def fake_tts(text, voice_id=None):
+            seen_speaking.append(voice_sync.get_session("bot-s3")["speaking"])
+            return b"X"
+
+        monkeypatch.setattr(voice_sync, "_tts", fake_tts)
+        monkeypatch.setattr(voice_sync, "_output_audio", lambda *a, **kw: True)
+
+        voice_sync.speak("bot-s3", "hi")
+        # While TTS was running, speaking was True; afterwards it's False
+        assert seen_speaking == [True]
+        assert voice_sync.get_session("bot-s3")["speaking"] is False
