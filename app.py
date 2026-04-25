@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import logging
+import threading
 import requests
 from flask import Flask, request, jsonify, send_from_directory
 
@@ -96,7 +97,6 @@ def recall_webhook():
 
     if status == "done" and bot_id:
         # Async: process in background to respond to webhook quickly
-        import threading
         threading.Thread(
             target=_process_recall_bot,
             args=(bot_id,),
@@ -136,6 +136,40 @@ def _process_recall_bot(bot_id: str):
         )
     except Exception as e:
         logger.error(f"process_recall_bot error: {e}", exc_info=True)
+
+
+@app.route("/api/recall/realtime", methods=["POST"])
+def recall_realtime_webhook():
+    """Receive real-time transcript events for active voice sync sessions.
+
+    Handler is dispatched in a background thread so we return 200 immediately —
+    Recall expects fast webhook responses, and the conversation pipeline
+    (Claude turn + ElevenLabs TTS + Recall output_audio) takes 2-5 seconds.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        threading.Thread(
+            target=_run_realtime_handler,
+            args=(payload,),
+            daemon=True,
+        ).start()
+    except Exception as e:
+        logger.error(f"Realtime webhook dispatch error: {e}", exc_info=True)
+    # Always 200 — Recall retries failures and we don't want a flood
+    return jsonify({"ok": True}), 200
+
+
+def _run_realtime_handler(payload: dict):
+    """Run voice_sync.handle_realtime_event with broad error catching.
+
+    Lives at module scope so it's monkeypatchable in tests; named so logs are
+    greppable.
+    """
+    try:
+        import voice_sync
+        voice_sync.handle_realtime_event(payload)
+    except Exception as e:
+        logger.error(f"Realtime handler error: {e}", exc_info=True)
 
 
 # ── Chat HTTP ────────────────────────────────────────────────────────────────

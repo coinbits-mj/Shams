@@ -468,3 +468,51 @@ class TestWebhookGlue:
             "data": {"bot": {"id": "bot-w5"}, "data": {"words": [], "participant": {"name": "Maher"}, "is_final": True}},
         })
         assert called["n"] == 0
+
+
+class TestRealtimeEndpoint:
+    def test_realtime_endpoint_dispatches_to_handler(self, monkeypatch):
+        import app as shams_app, voice_sync
+
+        seen = {"payload": None}
+        # Patch the module-scope helper that the route invokes synchronously
+        # so we don't need to wait for a background thread in the test.
+        def fake_run(p):
+            seen["payload"] = p
+        monkeypatch.setattr(shams_app, "_run_realtime_handler", fake_run)
+        # Make Thread call the target inline so observation is synchronous.
+        class InlineThread:
+            def __init__(self, target=None, args=(), daemon=None, **kw):
+                self._target = target
+                self._args = args
+            def start(self):
+                self._target(*self._args)
+        monkeypatch.setattr("app.threading.Thread", InlineThread, raising=False)
+
+        client = shams_app.app.test_client()
+        body = {"event": "transcript.data", "data": {"bot": {"id": "bot-rt"}, "data": {"words": [{"text": "hi"}]}}}
+        r = client.post("/api/recall/realtime", json=body)
+
+        assert r.status_code == 200
+        assert seen["payload"]["event"] == "transcript.data"
+
+    def test_realtime_endpoint_returns_200_even_on_handler_error(self, monkeypatch):
+        import app as shams_app
+
+        def boom(p): raise RuntimeError("kaboom")
+
+        # Patch the inline helper to raise — exception MUST not escape the route.
+        monkeypatch.setattr(shams_app, "_run_realtime_handler", boom)
+        # Make threading.Thread inline so the exception happens inside the request.
+        class InlineThread:
+            def __init__(self, target=None, args=(), daemon=None, **kw):
+                self._target = target
+                self._args = args
+            def start(self):
+                self._target(*self._args)
+        monkeypatch.setattr("app.threading.Thread", InlineThread, raising=False)
+
+        client = shams_app.app.test_client()
+        r = client.post("/api/recall/realtime", json={"event": "x", "data": {}})
+        # Recall retries 4xx/5xx — we always 200 to drain the queue
+        assert r.status_code == 200
