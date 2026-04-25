@@ -147,8 +147,30 @@ def extract_document_text(file_bytes: bytes, file_name: str) -> str:
 
 # ── Message processing ──────────────────────────────────────────────────────
 
+def maybe_handle_sync_command(msg: dict, chat_id: str) -> bool:
+    """If the message asks for a sync, dispatch the bot. Return True if handled."""
+    text = (msg.get("text") or "").strip().lower()
+    if not text:
+        return False
+
+    triggers = ("/sync", "let's sync", "lets sync", "shams let's sync", "shams lets sync")
+    if not any(t in text for t in triggers):
+        return False
+
+    import voice_sync
+    bot_id = voice_sync.dispatch_sync_bot()
+    if bot_id:
+        send_telegram(chat_id, f"🤖 Joining the sync — bot {bot_id}.")
+    else:
+        send_telegram(chat_id, "Couldn't dispatch the sync bot — check SYNC_MEET_URL and Recall config.")
+    return True
+
+
 def process_message(msg: dict, chat_id: str):
     """Process a single Telegram message — text, photo, voice, or document."""
+
+    if maybe_handle_sync_command(msg, chat_id):
+        return
 
     # --- Text ---
     if msg.get("text"):

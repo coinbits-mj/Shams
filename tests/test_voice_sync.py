@@ -670,3 +670,36 @@ class TestTelegramPing:
         monkeypatch.setattr(voice_sync, "should_ping", lambda now=None: True)
         voice_sync.smart_sync_ping_check()
         assert sent["n"] == 1
+
+
+class TestManualSyncCommand:
+    def test_slash_sync_dispatches_bot(self, monkeypatch):
+        import telegram as tg, voice_sync
+
+        called = {"n": 0}
+        monkeypatch.setattr(voice_sync, "dispatch_sync_bot", lambda: called.__setitem__("n", called["n"]+1) or "bot-x")
+        sent = []
+        monkeypatch.setattr(tg, "send_telegram", lambda c, t: sent.append((c, t)))
+
+        msg = {"text": "/sync", "chat": {"id": "123"}}
+        handled = tg.maybe_handle_sync_command(msg, "123")
+        assert handled is True
+        assert called["n"] == 1
+        assert sent and "bot-x" in sent[0][1].lower() or "joining" in sent[0][1].lower()
+
+    def test_lets_sync_phrase_dispatches_bot(self, monkeypatch):
+        import telegram as tg, voice_sync
+        called = {"n": 0}
+        monkeypatch.setattr(voice_sync, "dispatch_sync_bot", lambda: called.__setitem__("n", called["n"]+1) or "bot-y")
+        monkeypatch.setattr(tg, "send_telegram", lambda c, t: None)
+
+        for phrase in ("let's sync", "lets sync", "shams let's sync now"):
+            called["n"] = 0
+            msg = {"text": phrase, "chat": {"id": "123"}}
+            assert tg.maybe_handle_sync_command(msg, "123") is True
+            assert called["n"] == 1
+
+    def test_unrelated_text_returns_false(self, monkeypatch):
+        import telegram as tg
+        msg = {"text": "what's on my calendar", "chat": {"id": "123"}}
+        assert tg.maybe_handle_sync_command(msg, "123") is False
