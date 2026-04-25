@@ -456,6 +456,15 @@ def _check_meeting_bots():
         logger.error(f"Meeting bot fallback poller error: {e}")
 
 
+def _smart_sync_ping():
+    """Voice sync: evaluate ping conditions every 15 min."""
+    try:
+        import voice_sync
+        voice_sync.smart_sync_ping_check()
+    except Exception as e:
+        logger.error(f"Smart sync ping error: {e}")
+
+
 # ── Scheduler init ──────────────────────────────────────────────────────────
 
 def init_scheduler():
@@ -475,9 +484,10 @@ def init_scheduler():
     scheduler.add_job(log_daily_hosting, "cron", hour=0, minute=5, id="daily_hosting")
     scheduler.add_job(_check_meeting_preps, "interval", minutes=10, id="meeting_prep_check")
     scheduler.add_job(_check_meeting_bots, "interval", minutes=10, id="meeting_bot_check")
+    scheduler.add_job(_smart_sync_ping, "interval", minutes=15, id="smart_sync_ping")
     scheduler.start()
     logger.info(f"Scheduler started — overnight @ {config.OVERNIGHT_HOUR_UTC}:00 UTC, standup @ {config.STANDUP_HOUR_UTC}:00 UTC, evening @ {config.EVENING_HOUR_UTC}:00 UTC")
-    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min), meeting bots (10min)")
+    logger.info("Scheduled: inbox triage (30min), health check (5min), stale missions (daily), meeting prep (10min), meeting bots (10min), voice sync ping (15min)")
 
     # Load dynamic tasks from database
     _load_dynamic_tasks()
