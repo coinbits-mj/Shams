@@ -13,6 +13,7 @@ Sections:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -306,3 +307,81 @@ def format_context_for_prompt(ctx: dict) -> str:
             for e in emails[:2]:
                 lines.append(f"- {name}: {e.get('subject', '')} ({e.get('date', '')})")
     return "\n".join(lines)
+
+
+# ── Claude turn ─────────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """You are Shams, MJ's chief of staff. You're in a live voice conversation.
+
+RULES:
+- Be concise. Speak in 1-3 sentences per turn. Never monologue.
+- Surface relevant context proactively when useful.
+- Push back gently when something looks off.
+- Ask ONE clarifying question at a time, never multiple.
+- When MJ mentions a person, reference their recent email/commitments if you have them.
+- When MJ commits to something ("I'll do X"), confirm: "Got it, tracking that."
+- Don't say "as an AI" — you're his chief of staff.
+- Match his energy: casual when he's casual, sharp when he's focused.
+- If he says "just listen" — go quiet.
+"""
+
+_SYNC_MODEL = os.environ.get("SYNC_CLAUDE_MODEL", "claude-haiku-4-5")
+_MAX_SENTENCES = 3
+
+
+def _anthropic_client():
+    import anthropic
+    return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
+
+def _truncate_to_sentences(text: str, max_sentences: int = _MAX_SENTENCES) -> str:
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return " ".join(parts[:max_sentences]).strip()
+
+
+def _is_addressed_to_shams(utterance: str) -> bool:
+    """Cheap heuristic: does MJ name Shams or ask a direct question?"""
+    low = utterance.lower()
+    if "shams" in low:
+        return True
+    if "?" in utterance:
+        return True
+    return False
+
+
+def process_user_turn(bot_id: str, utterance: str) -> str | None:
+    """Append the utterance to history, call Claude, return the reply (or None).
+
+    Returns None when in passive mode and MJ didn't address Shams directly.
+    """
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return None
+
+    append_user_turn(bot_id, utterance)
+
+    if s["mode"] == "passive" and not _is_addressed_to_shams(utterance):
+        return None
+
+    ctx = build_live_context(utterance)
+    ctx_text = format_context_for_prompt(ctx)
+    system = _SYSTEM_PROMPT
+    if ctx_text:
+        system = system + "\n\nLIVE CONTEXT:\n" + ctx_text
+
+    try:
+        api = _anthropic_client()
+        resp = api.messages.create(
+            model=_SYNC_MODEL,
+            max_tokens=300,
+            system=system,
+            messages=list(s["history"]),
+        )
+        text = resp.content[0].text.strip()
+    except Exception:
+        logger.exception("Voice sync Claude turn error")
+        return None
+
+    text = _truncate_to_sentences(text)
+    append_assistant_turn(bot_id, text)
+    return text

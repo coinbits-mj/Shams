@@ -190,3 +190,102 @@ class TestLiveContext:
         assert "brandon" in lower
         for noise in ("you", "doing", "today", "going", "talk", "about", "the", "deal"):
             assert noise not in lower, f"{noise!r} leaked through stopwords"
+
+
+class TestClaudeTurn:
+    def test_process_user_turn_calls_claude_with_history_and_context(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-c1")
+        voice_sync.append_user_turn("bot-c1", "earlier msg")
+        voice_sync.append_assistant_turn("bot-c1", "earlier reply")
+
+        captured = {}
+
+        class FakeMsg:
+            content = [type("X", (), {"text": "Brandon at 2pm. Anything else?"})()]
+
+        class FakeAPI:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    captured.update(kw)
+                    return FakeMsg()
+
+        monkeypatch.setattr(voice_sync, "_anthropic_client", lambda: FakeAPI())
+        monkeypatch.setattr(voice_sync, "build_live_context", lambda utterance: {
+            "calendar_today": [{"summary": "Brandon", "start": "2026-04-25T18:00:00Z"}],
+            "overdue_commitments": [],
+            "mentioned_emails": {},
+        })
+
+        reply = voice_sync.process_user_turn("bot-c1", "what's next?")
+
+        assert reply == "Brandon at 2pm. Anything else?"
+        # System contains both the personality and the live context
+        sys_msg = captured["system"]
+        assert "chief of staff" in sys_msg.lower()
+        assert "Brandon" in sys_msg
+        # History was passed including the new user turn
+        msgs = captured["messages"]
+        assert msgs[-1] == {"role": "user", "content": "what's next?"}
+        assert any(m["content"] == "earlier reply" for m in msgs)
+
+    def test_process_user_turn_truncates_long_reply(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-c2")
+
+        long_reply = " ".join(f"Sentence number {i}." for i in range(1, 12))
+
+        class FakeMsg:
+            content = [type("X", (), {"text": long_reply})()]
+
+        class FakeAPI:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    return FakeMsg()
+
+        monkeypatch.setattr(voice_sync, "_anthropic_client", lambda: FakeAPI())
+        monkeypatch.setattr(voice_sync, "build_live_context", lambda u: {
+            "calendar_today": [], "overdue_commitments": [], "mentioned_emails": {}
+        })
+
+        reply = voice_sync.process_user_turn("bot-c2", "ramble please")
+        assert reply.count(".") <= 3
+
+    def test_process_user_turn_passive_mode_returns_none_unless_addressed(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-c3")
+        voice_sync.set_mode("bot-c3", "passive")
+
+        class FakeAPI:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    raise AssertionError("Claude should not be called in passive mode unless addressed")
+
+        monkeypatch.setattr(voice_sync, "_anthropic_client", lambda: FakeAPI())
+        monkeypatch.setattr(voice_sync, "build_live_context", lambda u: {
+            "calendar_today": [], "overdue_commitments": [], "mentioned_emails": {}
+        })
+
+        # Not addressed
+        assert voice_sync.process_user_turn("bot-c3", "thinking out loud here") is None
+        # Addressed by name → speak
+        # Need to allow the call now
+        called = {"n": 0}
+        class FakeMsg:
+            content = [type("X", (), {"text": "yes?"})()]
+        class FakeAPI2:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    called["n"] += 1
+                    return FakeMsg()
+        monkeypatch.setattr(voice_sync, "_anthropic_client", lambda: FakeAPI2())
+        reply = voice_sync.process_user_turn("bot-c3", "shams what time is it")
+        assert reply == "yes?"
+        assert called["n"] == 1
