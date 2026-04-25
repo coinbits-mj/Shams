@@ -370,8 +370,13 @@ def process_completed_meeting(
     platform = event_meta.get("platform", "google_meet")
 
     # Detect type + persona
-    meeting_type = detect_meeting_type(title, attendees)
-    persona = PERSONA_MAP.get(meeting_type, "shams")
+    explicit_type = event_meta.get("meeting_type")
+    explicit_persona = event_meta.get("persona")
+    if explicit_type:
+        meeting_type = explicit_type
+    else:
+        meeting_type = detect_meeting_type(event_meta.get("title", ""), event_meta.get("attendees", []))
+    persona = explicit_persona or PERSONA_MAP.get(meeting_type, "shams")
 
     # Cross-references
     refs = _gather_cross_references(attendee_emails)

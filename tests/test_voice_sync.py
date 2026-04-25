@@ -703,3 +703,38 @@ class TestManualSyncCommand:
         import telegram as tg
         msg = {"text": "what's on my calendar", "chat": {"id": "123"}}
         assert tg.maybe_handle_sync_command(msg, "123") is False
+
+
+class TestPostCall:
+    def test_post_call_clears_session_and_invokes_pipeline(self, monkeypatch):
+        import voice_sync, app as shams_app
+
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-pc")
+
+        monkeypatch.setattr(voice_sync, "_recall", lambda k: "1" if k == "sync_bot_bot-pc" else None)
+
+        called = {"process": 0}
+        monkeypatch.setattr(shams_app.memory, "recall", lambda k: '{"meeting_type":"daily_sync","persona":"shams","title":"Shams Sync","attendees":[]}')
+
+        # Patch transcript fetch + downstream pipeline
+        import recall_client as rc
+        monkeypatch.setattr(rc, "get_transcript", lambda bot_id: [
+            {"speaker": "Maher", "words": [{"text": "hi"}]},
+            {"speaker": "Shams", "words": [{"text": "hey"}]},
+        ])
+        monkeypatch.setattr(rc, "format_transcript", lambda u: "Maher: hi\nShams: hey\n" + ("X" * 100))
+
+        import meeting_bot
+        def fake_process(*, bot_id, transcript_text, event_meta):
+            called["process"] += 1
+            assert event_meta["meeting_type"] == "daily_sync"
+            assert event_meta["persona"] == "shams"
+        monkeypatch.setattr(meeting_bot, "process_completed_meeting", fake_process)
+
+        # Run
+        shams_app._process_recall_bot("bot-pc")
+
+        assert called["process"] == 1
+        # Session cleaned up
+        assert voice_sync.get_session("bot-pc") is None

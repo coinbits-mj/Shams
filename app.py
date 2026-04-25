@@ -113,14 +113,12 @@ def _process_recall_bot(bot_id: str):
     import json
 
     try:
-        # Get event metadata from memory
         meta_raw = memory.recall(f"recall_bot_{bot_id}")
         if not meta_raw:
             logger.error(f"No event meta found for bot {bot_id}")
             return
         event_meta = json.loads(meta_raw)
 
-        # Get transcript
         utterances = rc.get_transcript(bot_id)
         transcript_text = rc.format_transcript(utterances)
 
@@ -128,7 +126,6 @@ def _process_recall_bot(bot_id: str):
             logger.warning(f"Transcript too short for bot {bot_id}, skipping")
             return
 
-        # Process
         meeting_bot.process_completed_meeting(
             bot_id=bot_id,
             transcript_text=transcript_text,
@@ -136,6 +133,13 @@ def _process_recall_bot(bot_id: str):
         )
     except Exception as e:
         logger.error(f"process_recall_bot error: {e}", exc_info=True)
+    finally:
+        # If this was a voice-sync bot, end the live session
+        try:
+            import voice_sync
+            voice_sync.end_session(bot_id)
+        except Exception:
+            pass
 
 
 @app.route("/api/recall/realtime", methods=["POST"])
