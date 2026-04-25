@@ -85,5 +85,20 @@ MEETING_EXCLUDE_PATTERNS = os.environ.get(
 ).lower().split(",")
 MEETING_BOT_DISABLED = os.environ.get("MEETING_BOT_DISABLED", "").lower() in ("1", "true", "yes")
 
+# ElevenLabs (TTS for voice sync)
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_MODEL_ID = os.environ.get("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
+
+# Voice Sync (real-time meeting conversation with Shams)
+SYNC_WINDOW_START_UTC = int(os.environ.get("SYNC_WINDOW_START_UTC", "13"))  # 9am ET default
+SYNC_WINDOW_END_UTC = int(os.environ.get("SYNC_WINDOW_END_UTC", "15"))      # 11am ET default
+SYNC_SKIP_WEEKENDS = os.environ.get("SYNC_SKIP_WEEKENDS", "true").lower() in ("1", "true", "yes")
+SYNC_MEET_URL = os.environ.get("SYNC_MEET_URL", "")
+SYNC_BOT_NAME = os.environ.get("SYNC_BOT_NAME", "Shams")
+SYNC_PAUSE_SECONDS = float(os.environ.get("SYNC_PAUSE_SECONDS", "1.5"))
+SYNC_REALTIME_TRANSCRIPT_PROVIDER = os.environ.get("SYNC_REALTIME_TRANSCRIPT_PROVIDER", "deepgram_streaming")
+SYNC_DISABLED = os.environ.get("SYNC_DISABLED", "").lower() in ("1", "true", "yes")
+
 # Flask
 FLASK_PORT = int(os.environ.get("PORT", "8081"))
