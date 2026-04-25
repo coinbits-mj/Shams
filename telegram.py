@@ -160,7 +160,11 @@ def maybe_handle_sync_command(msg: dict, chat_id: str) -> bool:
     import voice_sync
     bot_id = voice_sync.dispatch_sync_bot()
     if bot_id:
-        send_telegram(chat_id, f"🤖 Joining the sync — bot {bot_id}.")
+        msg_text = f"🤖 Joining the sync — bot {bot_id}. Tap below to join, then admit Shams from the waiting room."
+        if config.SYNC_MEET_URL:
+            send_telegram_with_buttons(chat_id, msg_text, [{"text": "Join Sync ☕", "url": config.SYNC_MEET_URL}])
+        else:
+            send_telegram(chat_id, msg_text)
     else:
         send_telegram(chat_id, "Couldn't dispatch the sync bot — check SYNC_MEET_URL and Recall config.")
     return True

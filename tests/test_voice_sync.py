@@ -757,6 +757,29 @@ class TestManualSyncCommand:
         msg = {"text": "what's on my calendar", "chat": {"id": "123"}}
         assert tg.maybe_handle_sync_command(msg, "123") is False
 
+    def test_slash_sync_includes_meet_url_button_when_set(self, monkeypatch):
+        """Confirmation message should include a URL deeplink button to the Meet."""
+        import telegram as tg, voice_sync, config
+
+        monkeypatch.setattr(config, "SYNC_MEET_URL", "https://meet.google.com/xyz")
+        monkeypatch.setattr(voice_sync, "dispatch_sync_bot", lambda: "bot-z")
+
+        captured = {}
+        def fake_send_buttons(chat_id, text, buttons):
+            captured["chat_id"] = chat_id
+            captured["text"] = text
+            captured["buttons"] = buttons
+        monkeypatch.setattr(tg, "send_telegram_with_buttons", fake_send_buttons)
+        monkeypatch.setattr(tg, "send_telegram", lambda *a, **kw: None)
+
+        msg = {"text": "/sync", "chat": {"id": "123"}}
+        assert tg.maybe_handle_sync_command(msg, "123") is True
+
+        # A URL button to the Meet was sent
+        assert captured["buttons"][0].get("url") == "https://meet.google.com/xyz"
+        assert "join" in captured["buttons"][0]["text"].lower()
+        assert "bot-z" in captured["text"]
+
 
 class TestPostCall:
     def test_post_call_clears_session_and_invokes_pipeline(self, monkeypatch):
