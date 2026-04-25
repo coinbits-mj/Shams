@@ -12,6 +12,7 @@ Sections:
 """
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -329,7 +330,14 @@ _SYNC_MODEL = os.environ.get("SYNC_CLAUDE_MODEL", "claude-haiku-4-5")
 _MAX_SENTENCES = 3
 
 
+@functools.lru_cache(maxsize=1)
 def _anthropic_client():
+    """Module-level cached Anthropic client.
+
+    Keeping one client across turns lets the underlying httpx client reuse the
+    TLS connection to api.anthropic.com — saves ~100-200ms per turn vs a fresh
+    handshake. Tests monkeypatch this function, which bypasses the cache.
+    """
     import anthropic
     return anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
@@ -340,13 +348,13 @@ def _truncate_to_sentences(text: str, max_sentences: int = _MAX_SENTENCES) -> st
 
 
 def _is_addressed_to_shams(utterance: str) -> bool:
-    """Cheap heuristic: does MJ name Shams or ask a direct question?"""
-    low = utterance.lower()
-    if "shams" in low:
-        return True
-    if "?" in utterance:
-        return True
-    return False
+    """Wake-word check: did MJ explicitly call out Shams?
+
+    Used to gate replies in passive mode. Intentionally strict — a bare
+    question mark would otherwise make Shams interject when MJ is asking a
+    human teammate something. Active mode does not call this.
+    """
+    return "shams" in utterance.lower()
 
 
 def process_user_turn(bot_id: str, utterance: str) -> str | None:
@@ -369,6 +377,12 @@ def process_user_turn(bot_id: str, utterance: str) -> str | None:
     if ctx_text:
         system = system + "\n\nLIVE CONTEXT:\n" + ctx_text
 
+    # TODO: prompt caching — split system into a static persona block (cached)
+    # and a per-turn LIVE CONTEXT block (uncached) using
+    # `system=[{"type":"text","text":_SYSTEM_PROMPT,"cache_control":{"type":"ephemeral"}},
+    #          {"type":"text","text":"LIVE CONTEXT:\n"+ctx_text}]`.
+    # Saves ~50-100ms TTFT and ~90% of the persona token cost on Haiku.
+    # Defer until after Task 10 (webhook handler) ships.
     try:
         api = _anthropic_client()
         resp = api.messages.create(

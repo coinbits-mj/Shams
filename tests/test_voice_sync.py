@@ -289,3 +289,24 @@ class TestClaudeTurn:
         reply = voice_sync.process_user_turn("bot-c3", "shams what time is it")
         assert reply == "yes?"
         assert called["n"] == 1
+
+    def test_passive_mode_question_without_shams_is_silent(self, monkeypatch):
+        """Bare question mark in passive mode must NOT wake Shams."""
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-c4")
+        voice_sync.set_mode("bot-c4", "passive")
+
+        class FakeAPI:
+            class messages:
+                @staticmethod
+                def create(**kw):
+                    raise AssertionError("Claude should not be called for non-wake-word question")
+
+        monkeypatch.setattr(voice_sync, "_anthropic_client", lambda: FakeAPI())
+        monkeypatch.setattr(voice_sync, "build_live_context", lambda u: {
+            "calendar_today": [], "overdue_commitments": [], "mentioned_emails": {}
+        })
+
+        # Question to a teammate, NOT addressed to Shams
+        assert voice_sync.process_user_turn("bot-c4", "do you have that report ready?") is None
