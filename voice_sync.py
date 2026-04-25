@@ -52,7 +52,8 @@ def create_session(bot_id: str) -> dict:
             "mode": "active",         # "active" | "passive" (just listen)
             "context_cache": {},      # {calendar, commitments, mentions, ...} — populated by build_live_context (Task 7)
             "started_at": time.time(),
-            "speaking": False,        # true while Shams is mid-TTS to avoid overlap
+            "speaking": False,        # true while the speak() call is mid-API-roundtrip
+            "speaking_until": 0.0,    # monotonic deadline — Recall is still playing Shams's mp3 until this time
             "pause_timer": None,      # threading.Timer that fires _on_pause_complete after silence
         }
         _SESSIONS[bot_id] = s
@@ -151,6 +152,14 @@ def _arm_pause_timer(bot_id: str) -> None:
     t.start()
 
 
+def _is_playback_active(s: dict) -> bool:
+    """True while Recall is still playing Shams's TTS in the meeting."""
+    if s.get("speaking"):
+        return True
+    until = s.get("speaking_until", 0.0) or 0.0
+    return time.monotonic() < until
+
+
 def _on_pause_complete(bot_id: str) -> None:
     """Timer callback — runs ~SYNC_PAUSE_SECONDS after the last buffered chunk.
 
@@ -162,8 +171,11 @@ def _on_pause_complete(bot_id: str) -> None:
         s = _SESSIONS.get(bot_id)
         if s is None:
             return
-        if s.get("speaking"):
-            # Echo guard: while Shams is mid-TTS, don't process incoming audio
+        if _is_playback_active(s):
+            # Echo guard: Shams is still talking; the audio Recall is
+            # transcribing is our own. Drop whatever was buffered.
+            s["pending_words"] = []
+            s["pending_partial"] = ""
             return
         if not is_turn_complete(bot_id):
             return
@@ -500,22 +512,45 @@ def _output_audio(bot_id: str, mp3_bytes: bytes) -> bool:
     return recall_client.output_audio(bot_id, mp3_bytes)
 
 
+_AVG_SECONDS_PER_CHAR = 0.065  # ~15 chars/sec is roughly natural English TTS pace
+_MIN_PLAYBACK_SECONDS = 1.5    # always block at least this long after starting playback
+_PLAYBACK_BUFFER_SECONDS = 0.4  # extra cushion for Recall's queue + Meet jitter
+
+
+def _estimate_playback_seconds(text: str) -> float:
+    """Estimate how long Recall will spend playing this TTS in the meeting."""
+    chars = len(text or "")
+    return max(_MIN_PLAYBACK_SECONDS, chars * _AVG_SECONDS_PER_CHAR + _PLAYBACK_BUFFER_SECONDS)
+
+
 def speak(bot_id: str, text: str) -> bool:
-    """TTS the text and play it through the bot. Returns True on success."""
+    """TTS the text and play it through the bot. Returns True on success.
+
+    The `speaking_until` timestamp is set BEFORE we hand the mp3 to Recall and
+    held for ~playback duration so the realtime pipeline ignores Shams's own
+    audio (which Deepgram + Recall diarization tend to mis-tag as MJ).
+    """
     s = _SESSIONS.get(bot_id)
     if s is None:
         return False
 
+    duration = _estimate_playback_seconds(text)
     s["speaking"] = True
+    s["speaking_until"] = time.monotonic() + duration
     try:
         mp3 = _tts(text)
         if not mp3:
             logger.warning(f"TTS returned no audio for bot {bot_id}; skipping output")
+            # Nothing actually playing — release the lock immediately.
+            s["speaking_until"] = 0.0
             return False
         if not _output_audio(bot_id, mp3):
+            s["speaking_until"] = 0.0
             return False
         return True
     finally:
+        # Clear `speaking` (the API-call flag) but leave `speaking_until` so
+        # the echo guard keeps blocking until estimated playback finishes.
         s["speaking"] = False
 
 
@@ -574,10 +609,10 @@ def handle_realtime_event(payload: dict) -> None:
     s = _SESSIONS.get(bot_id)
     if s is None:
         return
-    # Echo guard: while Shams's TTS is playing into the meeting, ignore
-    # transcripts — Recall will pick up our own audio and we don't want to
-    # respond to ourselves.
-    if s.get("speaking"):
+    # Echo guard: while Shams's TTS is playing into the meeting (the API call
+    # has returned but Recall is still streaming the mp3), ignore transcripts.
+    # Recall + Deepgram diarization tend to mis-tag our own audio as MJ.
+    if _is_playback_active(s):
         return
 
     inner = data_outer.get("data", {}) or {}
