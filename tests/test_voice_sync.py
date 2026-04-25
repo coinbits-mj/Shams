@@ -366,3 +366,105 @@ class TestSpeak:
         # While TTS was running, speaking was True; afterwards it's False
         assert seen_speaking == [True]
         assert voice_sync.get_session("bot-s3")["speaking"] is False
+
+
+class TestWebhookGlue:
+    def _payload(self, bot_id, text, is_final=True, speaker="Maher"):
+        return {
+            "event": "transcript.data",
+            "data": {
+                "bot": {"id": bot_id},
+                "data": {
+                    "words": [{"text": w} for w in text.split()],
+                    "participant": {"name": speaker},
+                    "is_final": is_final,
+                },
+            },
+        }
+
+    def test_buffers_partial_does_not_speak(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-w1")
+
+        spoken = []
+        monkeypatch.setattr(voice_sync, "process_user_turn", lambda *a, **kw: "should not be called")
+        monkeypatch.setattr(voice_sync, "speak", lambda *a, **kw: spoken.append(a) or True)
+        monkeypatch.setattr(voice_sync, "is_turn_complete", lambda bot_id: False)
+
+        voice_sync.handle_realtime_event(self._payload("bot-w1", "hey there", is_final=False))
+
+        assert voice_sync.get_session("bot-w1")["pending_words"] == ["hey there"]
+        assert spoken == []
+
+    def test_full_turn_triggers_claude_then_speak(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-w2")
+
+        # Stage: pre-fill buffer, then signal turn-complete
+        monkeypatch.setattr(voice_sync, "is_turn_complete", lambda bot_id: True)
+
+        seen = {"utterance": None, "spoken": None}
+
+        def fake_process(bot_id, utterance):
+            seen["utterance"] = utterance
+            return "ok got it"
+
+        def fake_speak(bot_id, text):
+            seen["spoken"] = (bot_id, text)
+            return True
+
+        monkeypatch.setattr(voice_sync, "process_user_turn", fake_process)
+        monkeypatch.setattr(voice_sync, "speak", fake_speak)
+
+        voice_sync.handle_realtime_event(
+            self._payload("bot-w2", "what's next on calendar", is_final=True)
+        )
+
+        assert seen["utterance"] == "what's next on calendar"
+        assert seen["spoken"] == ("bot-w2", "ok got it")
+
+    def test_ignores_non_mj_speakers(self, monkeypatch):
+        """When MJ adds someone to the call, only MJ's utterances drive Shams turns."""
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-w3")
+
+        monkeypatch.setattr(voice_sync, "is_turn_complete", lambda bot_id: True)
+        called = {"speak": 0}
+        monkeypatch.setattr(voice_sync, "process_user_turn", lambda *a, **kw: "x")
+        monkeypatch.setattr(voice_sync, "speak", lambda *a, **kw: called.__setitem__("speak", called["speak"] + 1) or True)
+
+        # Speaker that's not MJ → ignore
+        voice_sync.handle_realtime_event(
+            self._payload("bot-w3", "hi shams", is_final=True, speaker="Brandon")
+        )
+        assert called["speak"] == 0
+
+    def test_unknown_bot_id_is_ignored(self):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        # Should not raise even though no session exists
+        voice_sync.handle_realtime_event({
+            "event": "transcript.data",
+            "data": {"bot": {"id": "nope"}, "data": {"words": [{"text": "hi"}]}},
+        })
+
+    def test_empty_drained_text_does_not_call_claude(self, monkeypatch):
+        import voice_sync
+        voice_sync._SESSIONS.clear()
+        voice_sync.create_session("bot-w5")
+
+        monkeypatch.setattr(voice_sync, "is_turn_complete", lambda bot_id: True)
+        monkeypatch.setattr(voice_sync, "drain_pending", lambda bot_id: "")
+
+        called = {"n": 0}
+        monkeypatch.setattr(voice_sync, "process_user_turn", lambda *a, **kw: called.__setitem__("n", called["n"]+1) or "x")
+        monkeypatch.setattr(voice_sync, "speak", lambda *a, **kw: True)
+
+        voice_sync.handle_realtime_event({
+            "event": "transcript.data",
+            "data": {"bot": {"id": "bot-w5"}, "data": {"words": [], "participant": {"name": "Maher"}, "is_final": True}},
+        })
+        assert called["n"] == 0

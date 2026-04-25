@@ -433,3 +433,61 @@ def speak(bot_id: str, text: str) -> bool:
         return True
     finally:
         s["speaking"] = False
+
+
+# ── Realtime event handler ──────────────────────────────────────────────────
+
+# Speakers we treat as MJ. Recall's `participant.name` comes from the meeting
+# attendee display name. Tolerant matching since Google Meet may show "Maher",
+# "Maher Janajri", "MJ", etc.
+_MJ_SPEAKER_TOKENS = ("maher", "mj", "janajri")
+
+
+def _is_mj_speaker(name: str | None) -> bool:
+    if not name:
+        # Default to True when speaker info is missing — better to over-respond
+        # than miss MJ. Adjust if we see false positives in practice.
+        return True
+    low = name.lower()
+    return any(tok in low for tok in _MJ_SPEAKER_TOKENS)
+
+
+def handle_realtime_event(payload: dict) -> None:
+    """Process one Recall.ai realtime transcript event.
+
+    Webhook delivers `transcript.data` (final) and `transcript.partial_data`
+    (in-progress) events. We append every chunk's words and check pause-based
+    completion after each one.
+    """
+    data_outer = payload.get("data", {}) or {}
+    bot = data_outer.get("bot", {}) or {}
+    bot_id = bot.get("id") or data_outer.get("bot_id", "")
+    if not bot_id:
+        return
+
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return
+
+    inner = data_outer.get("data", {}) or {}
+    words = inner.get("words", []) or []
+    text = " ".join(w.get("text", "") for w in words).strip()
+    is_final = bool(inner.get("is_final", payload.get("event") == "transcript.data"))
+    speaker = (inner.get("participant") or {}).get("name", "")
+
+    if not _is_mj_speaker(speaker):
+        return
+
+    if text:
+        buffer_words(bot_id, text, is_final=is_final)
+
+    if not is_turn_complete(bot_id):
+        return
+
+    utterance = drain_pending(bot_id)
+    if not utterance:
+        return
+
+    reply = process_user_turn(bot_id, utterance)
+    if reply:
+        speak(bot_id, reply)
