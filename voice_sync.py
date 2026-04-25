@@ -53,6 +53,7 @@ def create_session(bot_id: str) -> dict:
             "context_cache": {},      # {calendar, commitments, mentions, ...} — populated by build_live_context (Task 7)
             "started_at": time.time(),
             "speaking": False,        # true while Shams is mid-TTS to avoid overlap
+            "pause_timer": None,      # threading.Timer that fires _on_pause_complete after silence
         }
         _SESSIONS[bot_id] = s
         return s
@@ -65,7 +66,12 @@ def get_session(bot_id: str) -> dict | None:
 
 def end_session(bot_id: str) -> None:
     with _SESSION_LOCK:
-        _SESSIONS.pop(bot_id, None)
+        s = _SESSIONS.pop(bot_id, None)
+        if s and s.get("pause_timer"):
+            try:
+                s["pause_timer"].cancel()
+            except Exception:
+                pass
 
 
 def append_user_turn(bot_id: str, text: str) -> None:
@@ -117,6 +123,60 @@ def buffer_words(bot_id: str, text: str, is_final: bool) -> None:
     else:
         # Replace the rolling partial — DO NOT append.
         s["pending_partial"] = text
+
+    # Arm a background timer so the pause-completion check fires even if no
+    # more events arrive (which is exactly what happens when MJ stops talking).
+    _arm_pause_timer(bot_id)
+
+
+def _arm_pause_timer(bot_id: str) -> None:
+    """Schedule (or reschedule) the pause-completion check for a session.
+
+    Each new word resets the timer to fire SYNC_PAUSE_SECONDS later. Once the
+    user falls silent that long, _on_pause_complete runs and drains the turn.
+    """
+    s = _SESSIONS.get(bot_id)
+    if s is None:
+        return
+    existing = s.get("pause_timer")
+    if existing is not None:
+        try:
+            existing.cancel()
+        except Exception:
+            pass
+    delay = max(config.SYNC_PAUSE_SECONDS + 0.05, 0.1)
+    t = threading.Timer(delay, _on_pause_complete, args=[bot_id])
+    t.daemon = True
+    s["pause_timer"] = t
+    t.start()
+
+
+def _on_pause_complete(bot_id: str) -> None:
+    """Timer callback — runs ~SYNC_PAUSE_SECONDS after the last buffered chunk.
+
+    Re-checks turn completion (a fresh chunk could have arrived and bumped
+    last_word_at, in which case is_turn_complete is False and we bail — the
+    later buffer call already armed a new timer).
+    """
+    try:
+        s = _SESSIONS.get(bot_id)
+        if s is None:
+            return
+        if s.get("speaking"):
+            # Echo guard: while Shams is mid-TTS, don't process incoming audio
+            return
+        if not is_turn_complete(bot_id):
+            return
+        utterance = drain_pending(bot_id)
+        if not utterance:
+            return
+        logger.info(f"voice_sync turn drained bot={bot_id} utterance={utterance!r}")
+        reply = process_user_turn(bot_id, utterance)
+        if reply:
+            logger.info(f"voice_sync reply bot={bot_id} reply={reply!r}")
+            speak(bot_id, reply)
+    except Exception:
+        logger.exception(f"_on_pause_complete error for bot {bot_id}")
 
 
 def is_turn_complete(bot_id: str) -> bool:
