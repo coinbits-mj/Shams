@@ -307,6 +307,83 @@ def update_mission(mission_id: int, **kwargs):
         cur.execute(f"UPDATE {P}missions SET {', '.join(sets)} WHERE id = %s", params)
 
 
+# ── Media Requests ───────────────────────────────────────────────────────────
+
+def upsert_media_request(media_type: str, title: str, bridge_id: str,
+                         year: int | None = None, season: int | None = None,
+                         quality: str = "1080p", status: str = "unknown",
+                         raw_response: dict | None = None) -> int:
+    """Create/update a media request returned by the media bridge."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO {P}media_requests
+                (bridge_id, media_type, title, year, season, quality, last_status, raw_response, last_checked_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (bridge_id) DO UPDATE SET
+                media_type = EXCLUDED.media_type,
+                title = EXCLUDED.title,
+                year = COALESCE(EXCLUDED.year, {P}media_requests.year),
+                season = COALESCE(EXCLUDED.season, {P}media_requests.season),
+                quality = EXCLUDED.quality,
+                last_status = EXCLUDED.last_status,
+                raw_response = EXCLUDED.raw_response,
+                updated_at = NOW(),
+                last_checked_at = NOW()
+            RETURNING id
+            """,
+            (bridge_id, media_type, title, year, season, quality, status, json.dumps(raw_response or {})),
+        )
+        return cur.fetchone()[0]
+
+
+def update_media_request_status(bridge_id: str, status: str,
+                                raw_response: dict | None = None) -> None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            UPDATE {P}media_requests
+            SET last_status = %s, raw_response = %s, updated_at = NOW(), last_checked_at = NOW()
+            WHERE bridge_id = %s
+            """,
+            (status, json.dumps(raw_response or {}), bridge_id),
+        )
+
+
+def get_media_request(identifier: str) -> dict | None:
+    """Get a media request by bridge id, or the newest fuzzy title match."""
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(f"SELECT * FROM {P}media_requests WHERE bridge_id = %s", (identifier,))
+        row = cur.fetchone()
+        if row:
+            return row
+        cur.execute(
+            f"""
+            SELECT * FROM {P}media_requests
+            WHERE LOWER(title) LIKE LOWER(%s)
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (f"%{identifier}%",),
+        )
+        return cur.fetchone()
+
+
+def list_media_requests(status: str | None = None, limit: int = 20) -> list[dict]:
+    with get_conn() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        if status:
+            cur.execute(
+                f"SELECT * FROM {P}media_requests WHERE last_status = %s ORDER BY updated_at DESC LIMIT %s",
+                (status, limit),
+            )
+        else:
+            cur.execute(
+                f"SELECT * FROM {P}media_requests ORDER BY updated_at DESC LIMIT %s",
+                (limit,),
+            )
+        return cur.fetchall()
+
+
 # ── Activity Feed ────────────────────────────────────────────────────────────
 
 def log_activity(agent_name: str, event_type: str, content: str, metadata: dict | None = None):
