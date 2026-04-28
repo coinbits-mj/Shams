@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import base64
+import json
 import logging
 import tempfile
 import requests
@@ -219,6 +220,7 @@ def process_message(msg: dict, chat_id: str):
 
         if text.startswith("/movie "):
             import media_client
+            from tools.media import _format_media_status_message
             parts = text[len("/movie "):].strip().rsplit(" ", 1)
             if parts and parts[-1] in ("1080p", "2160p"):
                 title, quality = " ".join(parts[:-1]) if len(parts) > 1 else parts[0], parts[-1]
@@ -226,13 +228,20 @@ def process_message(msg: dict, chat_id: str):
                 title, quality = text[len("/movie "):].strip(), "1080p"
             try:
                 result = media_client.add_movie(title=title, quality=quality)
-                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+                status_msg = _format_media_status_message({
+                    "bridge_id": result.get("id"),
+                    "title": result.get("title", title),
+                    "last_status": result.get("status", "unknown"),
+                    "raw_response": result,
+                })
+                send_telegram(chat_id, status_msg)
             except Exception as e:
                 send_telegram(chat_id, f"Failed to add '{title}': {e}")
             return
 
         if text.startswith("/tv "):
             import media_client, re
+            from tools.media import _format_media_status_message
             rest = text[len("/tv "):].strip()
             m = re.match(r"^(?P<title>.+?)(?:\s+s(?P<season>\d+))?(?:\s+(?P<quality>1080p|2160p))?$", rest, re.I)
             if not m:
@@ -243,9 +252,30 @@ def process_message(msg: dict, chat_id: str):
             quality = m.group("quality") or "1080p"
             try:
                 result = media_client.add_tv(title=title, season=season, quality=quality)
-                send_telegram(chat_id, f"Added {result['title']} ({result['quality']}). I'll let you know when it's ready.")
+                status_msg = _format_media_status_message({
+                    "bridge_id": result.get("id"),
+                    "title": result.get("title", title),
+                    "last_status": result.get("status", "unknown"),
+                    "raw_response": result,
+                })
+                send_telegram(chat_id, status_msg)
             except Exception as e:
                 send_telegram(chat_id, f"Failed to add '{title}': {e}")
+            return
+
+        if text.startswith("/media_status ") or text.startswith("/downloads"):
+            from tools.media import get_media_status, list_media_requests
+            try:
+                if text.startswith("/media_status "):
+                    query = text[len("/media_status "):].strip()
+                    data = json.loads(get_media_status(query))
+                    send_telegram(chat_id, data.get("status_message") or json.dumps(data, default=str))
+                else:
+                    data = json.loads(list_media_requests(status=None, limit=15))
+                    lines = [r.get("status_message", "") for r in data.get("requests", [])]
+                    send_telegram(chat_id, "\n".join(lines) if lines else "No tracked media requests yet.")
+            except Exception as e:
+                send_telegram(chat_id, f"Failed to check media status: {e}")
             return
 
         logger.info(f"Message from MJ: {text[:100]}")

@@ -112,6 +112,21 @@ CREATE TABLE IF NOT EXISTS shams_activity_feed (
     timestamp       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS shams_media_requests (
+    id              SERIAL PRIMARY KEY,
+    bridge_id       VARCHAR(100) NOT NULL UNIQUE, -- e.g. radarr:18, sonarr:42
+    media_type      VARCHAR(20) NOT NULL CHECK (media_type IN ('movie', 'tv')),
+    title           VARCHAR(500) NOT NULL,
+    year            INTEGER,
+    season          INTEGER,
+    quality         VARCHAR(20) NOT NULL DEFAULT '1080p',
+    last_status     VARCHAR(50) NOT NULL DEFAULT 'unknown',
+    raw_response    JSONB DEFAULT '{}',
+    requested_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_checked_at TIMESTAMPTZ
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON shams_conversations (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_key ON shams_memory (key);
@@ -125,6 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_missions_status ON shams_missions (status);
 CREATE INDEX IF NOT EXISTS idx_missions_agent ON shams_missions (assigned_agent);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_ts ON shams_activity_feed (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_feed_agent ON shams_activity_feed (agent_name, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_media_requests_status ON shams_media_requests (last_status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_requests_title ON shams_media_requests (LOWER(title));
 
 CREATE TABLE IF NOT EXISTS shams_notifications (
     id              SERIAL PRIMARY KEY,

@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import logging
 import pkgutil
+import sys
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
@@ -64,12 +65,21 @@ def execute(name: str, params: dict) -> Any:
 
 
 def discover_tools() -> None:
-    """Import all tools/*.py modules to trigger @tool decorations."""
+    """Import all tools/*.py modules to trigger @tool decorations.
+
+    Tests sometimes clear the registry after modules are already imported. In
+    that case import_module is a no-op, so explicitly reload known tool modules
+    to re-run their @tool decorators.
+    """
     import tools as tools_pkg
     for _importer, modname, _ispkg in pkgutil.iter_modules(tools_pkg.__path__):
         if modname == "registry":
             continue
-        importlib.import_module(f"tools.{modname}")
+        module_name = f"tools.{modname}"
+        if module_name in sys.modules:
+            importlib.reload(sys.modules[module_name])
+        else:
+            importlib.import_module(module_name)
     log.info("Discovered %d tools from tools/ package", len(_registry))
 
 
